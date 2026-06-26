@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!--
+    Strict Content-Security-Policy: the page may only load and talk to its
+    own files (everything is 'self'; no external/cross-origin origins are
+    allowed anywhere). With no remote endpoint permitted, the browser will
+    refuse any attempt to upload your PDF off your machine.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; base-uri 'none'; form-action 'none'" />
   <title>PDF → Markdown</title>
+  <!-- Empty data icon: avoids a stray /favicon.ico request. -->
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -71,8 +80,7 @@
     </footer>
   </main>
 
-  <!-- pdf.js (Mozilla) loaded from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs" type="module"></script>
+  <!-- pdf.js (Mozilla) bundled locally — no external network calls -->
   <script src="app.js" type="module"></script>
 </body>
 </html>

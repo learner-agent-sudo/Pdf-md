@@ -4,10 +4,9 @@
 // visual lines, then apply lightweight heuristics (font size → heading level,
 // vertical gaps → paragraph breaks) to reconstruct a readable Markdown document.
 
-import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
+import * as pdfjsLib from "./vendor/pdf.min.mjs";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
 // --- DOM ---------------------------------------------------------------
 const dropZone = document.getElementById("drop-zone");
@@ -192,9 +191,9 @@ async function convertPage(page) {
     if (optHeadings.checked) {
       const ratio = line.size / bodySize;
       const short = line.text.length <= 120;
-      if (ratio >= 1.7 && short) md = `# ${md}`;
-      else if (ratio >= 1.35 && short) md = `## ${md}`;
-      else if (ratio >= 1.15 && short) md = `### ${md}`;
+      if (ratio >= 2.0 && short) md = `# ${md}`;
+      else if (ratio >= 1.5 && short) md = `## ${md}`;
+      else if (ratio >= 1.18 && short) md = `### ${md}`;
       else if (line.bold && short && /[A-Za-z]/.test(line.text) && line.text.length <= 80) {
         // A short, fully-bold line that isn't bigger: treat as a minor heading.
         md = `**${md}**`;
