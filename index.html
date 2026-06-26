@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF → Markdown</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>PDF&nbsp;→&nbsp;Markdown</h1>
+      <p class="subtitle">
+        Drag a PDF in, get a clean <code>.md</code> file out. Everything runs in
+        your browser — your file is never uploaded anywhere.
+      </p>
+    </header>
+
+    <section id="drop-zone" class="drop-zone" tabindex="0" aria-label="Drop a PDF file here">
+      <div class="drop-inner">
+        <svg class="drop-icon" viewBox="0 0 24 24" width="48" height="48" aria-hidden="true">
+          <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"
+                fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <p class="drop-text">Drag &amp; drop a PDF here</p>
+        <p class="drop-or">or</p>
+        <button type="button" id="browse-btn" class="btn">Choose a file</button>
+        <input type="file" id="file-input" accept="application/pdf,.pdf" hidden />
+      </div>
+    </section>
+
+    <section id="options" class="options">
+      <label class="opt">
+        <input type="checkbox" id="opt-headings" checked />
+        Detect headings from font sizes
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="opt-pagebreaks" />
+        Insert page-break markers
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="opt-imagemarks" checked />
+        Mark image/signature regions
+      </label>
+    </section>
+
+    <section id="progress-wrap" class="progress-wrap" hidden>
+      <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+      <p id="progress-label" class="progress-label">Working…</p>
+    </section>
+
+    <section id="result" class="result" hidden>
+      <div class="result-bar">
+        <span id="result-name" class="result-name"></span>
+        <div class="result-actions">
+          <button type="button" id="copy-btn" class="btn btn-secondary">Copy</button>
+          <button type="button" id="download-btn" class="btn">Download .md</button>
+        </div>
+      </div>
+      <textarea id="output" class="output" spellcheck="false" readonly></textarea>
+    </section>
+
+    <p id="error" class="error" hidden></p>
+
+    <footer>
+      <p>
+        Text-based PDFs convert cleanly. Scanned pages, handwriting, and
+        signatures are images, not text — they can't be extracted without OCR.
+      </p>
+    </footer>
+  </main>
+
+  <!-- pdf.js (Mozilla) loaded from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs" type="module"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
