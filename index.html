@@ -7,10 +7,10 @@
     Strict Content-Security-Policy: the page may only load and talk to its
     own files (everything is 'self'; no external/cross-origin origins are
     allowed anywhere). With no remote endpoint permitted, the browser will
-    refuse any attempt to upload your PDF off your machine.
+    refuse any attempt to upload your files off your machine.
   -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; base-uri 'none'; form-action 'none'" />
-  <title>PDF → Markdown</title>
+  <title>PDF / Word → Markdown</title>
   <!-- Empty data icon: avoids a stray /favicon.ico request. -->
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
@@ -18,35 +18,38 @@
 <body>
   <main class="container">
     <header>
-      <h1>PDF&nbsp;→&nbsp;Markdown</h1>
+      <h1>PDF / Word&nbsp;→&nbsp;Markdown</h1>
       <p class="subtitle">
-        Drag a PDF in, get a clean <code>.md</code> file out. Everything runs in
-        your browser — your file is never uploaded anywhere.
+        Drop in one or more PDF or Word (<code>.docx</code>) files, get clean
+        <code>.md</code> back. Everything runs in your browser — your files are
+        never uploaded anywhere.
       </p>
     </header>
 
-    <section id="drop-zone" class="drop-zone" tabindex="0" aria-label="Drop a PDF file here">
+    <section id="drop-zone" class="drop-zone" tabindex="0" aria-label="Drop PDF or Word files here">
       <div class="drop-inner">
         <svg class="drop-icon" viewBox="0 0 24 24" width="48" height="48" aria-hidden="true">
           <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"
                 fill="none" stroke="currentColor" stroke-width="1.6"
                 stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <p class="drop-text">Drag &amp; drop a PDF here</p>
+        <p class="drop-text">Drag &amp; drop PDF or Word files here</p>
         <p class="drop-or">or</p>
-        <button type="button" id="browse-btn" class="btn">Choose a file</button>
-        <input type="file" id="file-input" accept="application/pdf,.pdf" hidden />
+        <button type="button" id="browse-btn" class="btn">Choose files</button>
+        <input type="file" id="file-input"
+               accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+               multiple hidden />
       </div>
     </section>
 
     <section id="options" class="options">
       <label class="opt">
         <input type="checkbox" id="opt-headings" checked />
-        Detect headings from font sizes
+        Detect headings from font sizes <span class="opt-note">(PDF)</span>
       </label>
       <label class="opt">
         <input type="checkbox" id="opt-pagebreaks" />
-        Insert page-break markers
+        Insert page-break markers <span class="opt-note">(PDF)</span>
       </label>
       <label class="opt">
         <input type="checkbox" id="opt-imagemarks" checked />
@@ -59,28 +62,33 @@
       <p id="progress-label" class="progress-label">Working…</p>
     </section>
 
-    <section id="result" class="result" hidden>
-      <div class="result-bar">
-        <span id="result-name" class="result-name"></span>
-        <div class="result-actions">
-          <button type="button" id="copy-btn" class="btn btn-secondary">Copy</button>
-          <button type="button" id="download-btn" class="btn">Download .md</button>
-        </div>
-      </div>
-      <textarea id="output" class="output" spellcheck="false" readonly></textarea>
+    <section id="results-head" class="results-head" hidden>
+      <span id="results-summary" class="results-summary"></span>
+      <button type="button" id="download-all" class="btn" hidden>Download all (.zip)</button>
     </section>
+
+    <section id="results" class="results"></section>
 
     <p id="error" class="error" hidden></p>
 
     <footer>
       <p>
-        Text-based PDFs convert cleanly. Scanned pages, handwriting, and
-        signatures are images, not text — they can't be extracted without OCR.
+        Text-based PDFs and <code>.docx</code> files convert cleanly. Scanned
+        pages, handwriting, and signatures are images, not text — they can't be
+        extracted without OCR. The old binary <code>.doc</code> format isn't
+        supported (save it as <code>.docx</code> first).
       </p>
     </footer>
   </main>
 
-  <!-- pdf.js (Mozilla) bundled locally — no external network calls -->
+  <!-- Vendored libraries (classic scripts expose globals) — all local, no CDN.
+       These run before the deferred module below. -->
+  <script src="vendor/mammoth.browser.min.js"></script>
+  <script src="vendor/turndown.js"></script>
+  <script src="vendor/turndown-plugin-gfm.js"></script>
+  <script src="vendor/jszip.min.js"></script>
+
+  <!-- App logic (ES module; imports pdf.js from vendor/) -->
   <script src="app.js" type="module"></script>
 </body>
 </html>

@@ -1,12 +1,18 @@
-// PDF → Markdown converter — runs entirely client-side using pdf.js.
+// PDF / Word → Markdown converter — runs entirely client-side.
 //
-// Strategy: pull the positioned text items out of each page, regroup them into
-// visual lines, then apply lightweight heuristics (font size → heading level,
-// vertical gaps → paragraph breaks) to reconstruct a readable Markdown document.
+// - PDF:  pdf.js pulls positioned text out of each page, then heuristics
+//         (font size → heading level, vertical gaps → paragraphs) rebuild it.
+// - DOCX: mammoth.js converts the Word document to HTML, then Turndown
+//         (with the GFM plugin for tables) turns that HTML into Markdown.
+//
+// Multiple files are converted in one batch; each gets its own result card,
+// and everything can be downloaded together as a .zip.
 
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
-
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
+
+// Globals provided by the vendored classic scripts (loaded before this module).
+const { mammoth, TurndownService, turndownPluginGfm, JSZip } = window;
 
 // --- DOM ---------------------------------------------------------------
 const dropZone = document.getElementById("drop-zone");
@@ -15,24 +21,23 @@ const browseBtn = document.getElementById("browse-btn");
 const progressWrap = document.getElementById("progress-wrap");
 const progressFill = document.getElementById("progress-fill");
 const progressLabel = document.getElementById("progress-label");
-const resultSection = document.getElementById("result");
-const resultName = document.getElementById("result-name");
-const output = document.getElementById("output");
-const copyBtn = document.getElementById("copy-btn");
-const downloadBtn = document.getElementById("download-btn");
+const resultsHead = document.getElementById("results-head");
+const resultsSummary = document.getElementById("results-summary");
+const downloadAllBtn = document.getElementById("download-all");
+const resultsEl = document.getElementById("results");
 const errorEl = document.getElementById("error");
 
 const optHeadings = document.getElementById("opt-headings");
 const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 
-let lastMarkdown = "";
-let lastBaseName = "document";
+let results = []; // [{ baseName, markdown, meta, ok, error }]
 
 // --- Wiring ------------------------------------------------------------
 browseBtn.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", (e) => {
-  if (e.target.files.length) handleFile(e.target.files[0]);
+  if (e.target.files.length) handleFiles(e.target.files);
+  fileInput.value = ""; // allow re-selecting the same file
 });
 
 ["dragenter", "dragover"].forEach((evt) =>
@@ -48,8 +53,7 @@ fileInput.addEventListener("change", (e) => {
   })
 );
 dropZone.addEventListener("drop", (e) => {
-  const file = e.dataTransfer.files[0];
-  if (file) handleFile(file);
+  if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
 });
 dropZone.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") {
@@ -58,72 +62,132 @@ dropZone.addEventListener("keydown", (e) => {
   }
 });
 
-copyBtn.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(lastMarkdown);
-    copyBtn.textContent = "Copied!";
-    setTimeout(() => (copyBtn.textContent = "Copy"), 1500);
-  } catch {
-    output.select();
-    document.execCommand("copy");
-  }
-});
+downloadAllBtn.addEventListener("click", downloadAllZip);
 
-downloadBtn.addEventListener("click", () => {
-  const blob = new Blob([lastMarkdown], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${lastBaseName}.md`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-// --- Main flow ---------------------------------------------------------
-async function handleFile(file) {
+// --- Batch flow --------------------------------------------------------
+async function handleFiles(fileList) {
   hideError();
-  if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-    showError("That doesn't look like a PDF. Please choose a .pdf file.");
-    return;
-  }
-
-  lastBaseName = file.name.replace(/\.pdf$/i, "") || "document";
-  resultSection.hidden = true;
+  const files = [...fileList];
+  results = [];
+  resultsEl.innerHTML = "";
+  resultsHead.hidden = true;
   progressWrap.hidden = false;
-  setProgress(0, "Reading file…");
 
-  try {
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-    const total = pdf.numPages;
-    const pages = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    setProgress(i / files.length, `Converting ${file.name} (${i + 1} of ${files.length})…`);
+    await new Promise((r) => setTimeout(r, 0)); // let the UI paint
 
-    for (let i = 1; i <= total; i++) {
-      const page = await pdf.getPage(i);
-      pages.push(await convertPage(page));
-      page.cleanup();
-      setProgress(i / total, `Converting page ${i} of ${total}…`);
-      // Yield to the event loop so the UI stays responsive on large PDFs.
-      await new Promise((r) => setTimeout(r, 0));
+    const baseName = file.name.replace(/\.(pdf|docx?)$/i, "") || "document";
+    try {
+      const kind = detectKind(file);
+      if (kind === "pdf") {
+        const { markdown, meta } = await convertPdf(file);
+        results.push({ baseName, markdown, meta, ok: true });
+      } else if (kind === "docx") {
+        const { markdown, meta } = await convertDocx(file);
+        results.push({ baseName, markdown, meta, ok: true });
+      } else if (kind === "doc") {
+        results.push({ baseName, ok: false, error: "Old .doc format isn't supported — save it as .docx and try again." });
+      } else {
+        results.push({ baseName, ok: false, error: "Unsupported file type. Please use a PDF or .docx file." });
+      }
+    } catch (err) {
+      console.error(err);
+      results.push({ baseName, ok: false, error: err.message || String(err) });
     }
-
-    let md = pages.join(optPageBreaks.checked ? "\n\n---\n\n" : "\n\n");
-    md = tidy(md);
-
-    lastMarkdown = md;
-    output.value = md;
-    resultName.textContent = `${lastBaseName}.md  ·  ${total} page${total > 1 ? "s" : ""}`;
-    progressWrap.hidden = true;
-    resultSection.hidden = false;
-  } catch (err) {
-    console.error(err);
-    progressWrap.hidden = true;
-    showError(`Couldn't convert this PDF: ${err.message || err}`);
   }
+
+  setProgress(1, "Done");
+  progressWrap.hidden = true;
+  renderResults();
+}
+
+function detectKind(file) {
+  const n = file.name.toLowerCase();
+  if (n.endsWith(".pdf") || file.type === "application/pdf") return "pdf";
+  if (n.endsWith(".docx")) return "docx";
+  if (n.endsWith(".doc")) return "doc";
+  return "unknown";
+}
+
+// --- DOCX → Markdown ---------------------------------------------------
+async function convertDocx(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
+  const md = tidy(makeTurndown().turndown(prepDocxHtml(html)));
+  return { markdown: md, meta: `Word · ${countWords(md)} words` };
+}
+
+// mammoth emits table cells as <td><p>…</p></td> with no header row, but the
+// GFM Markdown-table rule only fires when the first row is <th>. Markdown
+// tables need a header row anyway, so: flatten the paragraphs inside each cell
+// and promote the first row's cells to <th>.
+function prepDocxHtml(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  doc.querySelectorAll("td, th").forEach((cell) => {
+    const ps = cell.querySelectorAll(":scope > p");
+    if (ps.length) {
+      cell.innerHTML = [...ps].map((p) => p.innerHTML.trim()).join(" ");
+    }
+  });
+
+  doc.querySelectorAll("table").forEach((table) => {
+    const firstRow = table.querySelector("tr");
+    if (!firstRow) return;
+    const cells = [...firstRow.children];
+    if (!cells.some((c) => c.nodeName === "TH")) {
+      cells.forEach((td) => {
+        const th = doc.createElement("th");
+        th.innerHTML = td.innerHTML;
+        td.replaceWith(th);
+      });
+    }
+  });
+
+  return doc.body.innerHTML;
+}
+
+function makeTurndown() {
+  const td = new TurndownService({
+    headingStyle: "atx",
+    hr: "---",
+    bulletListMarker: "-",
+    codeBlockStyle: "fenced",
+  });
+  td.use(turndownPluginGfm.gfm); // GitHub-flavored tables, strikethrough, etc.
+
+  // Images in Word docs arrive as embedded base64 data — huge and useless in
+  // Markdown, so replace them with a marker (or drop them entirely).
+  td.addRule("stripImages", {
+    filter: "img",
+    replacement: () => (optImageMarks.checked ? "*(image omitted)*" : ""),
+  });
+  return td;
+}
+
+// --- PDF → Markdown ----------------------------------------------------
+async function convertPdf(file) {
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const total = pdf.numPages;
+  const pages = [];
+
+  for (let i = 1; i <= total; i++) {
+    const page = await pdf.getPage(i);
+    pages.push(await convertPdfPage(page));
+    page.cleanup();
+    await new Promise((r) => setTimeout(r, 0)); // stay responsive on large PDFs
+  }
+
+  let md = pages.join(optPageBreaks.checked ? "\n\n---\n\n" : "\n\n");
+  md = tidy(md);
+  return { markdown: md, meta: `PDF · ${total} page${total > 1 ? "s" : ""}` };
 }
 
 // Convert a single page's text content into a Markdown fragment.
-async function convertPage(page) {
+async function convertPdfPage(page) {
   const content = await page.getTextContent();
   const items = content.items.filter((it) => "str" in it);
 
@@ -208,16 +272,124 @@ async function convertPage(page) {
   return out.join("\n");
 }
 
-// --- Markdown tidy-up --------------------------------------------------
+// --- Rendering results -------------------------------------------------
+function renderResults() {
+  resultsEl.innerHTML = "";
+  const okCount = results.filter((r) => r.ok).length;
+
+  resultsHead.hidden = false;
+  resultsSummary.textContent =
+    `${okCount} of ${results.length} file${results.length > 1 ? "s" : ""} converted`;
+  downloadAllBtn.hidden = okCount < 2;
+
+  results.forEach((r, idx) => {
+    const card = document.createElement("div");
+    card.className = "card" + (r.ok ? "" : " card-error");
+
+    const bar = document.createElement("div");
+    bar.className = "card-bar";
+
+    const name = document.createElement("span");
+    name.className = "card-name";
+    name.textContent = r.ok ? `${r.baseName}.md  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
+    bar.appendChild(name);
+
+    if (r.ok) {
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "btn btn-secondary";
+      copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(r.markdown);
+        } catch {
+          const ta = card.querySelector("textarea");
+          ta.select();
+          document.execCommand("copy");
+        }
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => (copyBtn.textContent = "Copy"), 1500);
+      });
+
+      const dlBtn = document.createElement("button");
+      dlBtn.className = "btn";
+      dlBtn.textContent = "Download .md";
+      dlBtn.addEventListener("click", () =>
+        downloadBlob(
+          new Blob([r.markdown], { type: "text/markdown;charset=utf-8" }),
+          `${r.baseName}.md`
+        )
+      );
+
+      actions.append(copyBtn, dlBtn);
+      bar.appendChild(actions);
+    }
+
+    card.appendChild(bar);
+
+    if (r.ok) {
+      const ta = document.createElement("textarea");
+      ta.className = "output";
+      ta.readOnly = true;
+      ta.spellcheck = false;
+      ta.value = r.markdown;
+      card.appendChild(ta);
+    } else {
+      const msg = document.createElement("p");
+      msg.className = "card-msg";
+      msg.textContent = r.error;
+      card.appendChild(msg);
+    }
+
+    resultsEl.appendChild(card);
+  });
+}
+
+async function downloadAllZip() {
+  const zip = new JSZip();
+  const used = new Map();
+  for (const r of results) {
+    if (!r.ok) continue;
+    // Avoid clobbering when two inputs share a base name.
+    let name = `${r.baseName}.md`;
+    if (used.has(name)) {
+      const n = used.get(name) + 1;
+      used.set(name, n);
+      name = `${r.baseName} (${n}).md`;
+    } else {
+      used.set(name, 1);
+    }
+    zip.file(name, r.markdown);
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, "markdown-files.zip");
+}
+
+// --- Helpers -----------------------------------------------------------
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function tidy(md) {
   return md
-    .replace(/[ \t]+\n/g, "\n") // trailing spaces
-    .replace(/\n{3,}/g, "\n\n") // collapse runs of blank lines
-    .replace(/^\s+|\s+$/g, "") // trim ends
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\s+|\s+$/g, "")
     .concat("\n");
 }
 
-// --- Small stats helpers ----------------------------------------------
+function countWords(md) {
+  const m = md.trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
 function median(nums) {
   if (!nums.length) return 0;
   const s = [...nums].sort((a, b) => a - b);
@@ -241,7 +413,6 @@ function mode(nums) {
   return best;
 }
 
-// --- UI helpers --------------------------------------------------------
 function setProgress(fraction, label) {
   progressFill.style.width = `${Math.round(fraction * 100)}%`;
   if (label) progressLabel.textContent = label;
