@@ -12,7 +12,14 @@ import * as pdfjsLib from "./vendor/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
 // Globals provided by the vendored classic scripts (loaded before this module).
-const { mammoth, TurndownService, turndownPluginGfm, JSZip } = window;
+const { mammoth, TurndownService, turndownPluginGfm, JSZip, Tesseract } = window;
+
+// Local paths for the Tesseract OCR assets (all vendored — no CDN).
+const OCR_PATHS = {
+  workerPath: "vendor/tesseract-worker.min.js",
+  corePath: "vendor/tesseract-core-simd-lstm.wasm.js",
+  langPath: "vendor",
+};
 
 // --- DOM ---------------------------------------------------------------
 const dropZone = document.getElementById("drop-zone");
@@ -30,8 +37,10 @@ const errorEl = document.getElementById("error");
 const optHeadings = document.getElementById("opt-headings");
 const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
+const optOcr = document.getElementById("opt-ocr");
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
+let ocrWorker = null; // lazily created, reused across a batch
 
 // --- Wiring ------------------------------------------------------------
 browseBtn.addEventListener("click", () => fileInput.click());
@@ -82,15 +91,18 @@ async function handleFiles(fileList) {
     try {
       const kind = detectKind(file);
       if (kind === "pdf") {
-        const { markdown, meta } = await convertPdf(file);
+        const { markdown, meta } = await convertPdf(file, i, files.length);
         results.push({ baseName, markdown, meta, ok: true });
       } else if (kind === "docx") {
         const { markdown, meta } = await convertDocx(file);
         results.push({ baseName, markdown, meta, ok: true });
+      } else if (kind === "image") {
+        const { markdown, meta } = await convertImage(file);
+        results.push({ baseName, markdown, meta, ok: true });
       } else if (kind === "doc") {
         results.push({ baseName, ok: false, error: "Old .doc format isn't supported — save it as .docx and try again." });
       } else {
-        results.push({ baseName, ok: false, error: "Unsupported file type. Please use a PDF or .docx file." });
+        results.push({ baseName, ok: false, error: "Unsupported file type. Please use a PDF, .docx, or image file." });
       }
     } catch (err) {
       console.error(err);
@@ -98,6 +110,7 @@ async function handleFiles(fileList) {
     }
   }
 
+  await disposeOcrWorker(); // free the OCR worker once the batch is done
   setProgress(1, "Done");
   progressWrap.hidden = true;
   renderResults();
@@ -108,7 +121,45 @@ function detectKind(file) {
   if (n.endsWith(".pdf") || file.type === "application/pdf") return "pdf";
   if (n.endsWith(".docx")) return "docx";
   if (n.endsWith(".doc")) return "doc";
+  if (/\.(png|jpe?g|webp|bmp|gif)$/.test(n) || file.type.startsWith("image/")) return "image";
   return "unknown";
+}
+
+// --- OCR (Tesseract.js) ------------------------------------------------
+// One worker is created on first use and reused for the whole batch.
+async function getOcrWorker() {
+  if (ocrWorker) return ocrWorker;
+  ocrWorker = await Tesseract.createWorker("eng", 1, OCR_PATHS);
+  return ocrWorker;
+}
+
+async function disposeOcrWorker() {
+  if (!ocrWorker) return;
+  try {
+    await ocrWorker.terminate();
+  } catch {
+    /* ignore */
+  }
+  ocrWorker = null;
+}
+
+async function ocrImageSource(source) {
+  const worker = await getOcrWorker();
+  const { data } = await worker.recognize(source);
+  return (data.text || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// Convert a whole image file to Markdown via OCR.
+async function convertImage(file) {
+  if (!optOcr.checked) {
+    return {
+      markdown: `*(image file — enable “OCR scanned pages & images” to extract text)*\n`,
+      meta: "image · OCR off",
+    };
+  }
+  setProgress(null, `OCR ${file.name}…`);
+  const text = await ocrImageSource(file);
+  return { markdown: tidy(text || "*(no text found in image)*"), meta: `image · OCR` };
 }
 
 // --- DOCX → Markdown ---------------------------------------------------
@@ -168,22 +219,53 @@ function makeTurndown() {
 }
 
 // --- PDF → Markdown ----------------------------------------------------
-async function convertPdf(file) {
+async function convertPdf(file, fileIndex, fileCount) {
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const total = pdf.numPages;
   const pages = [];
+  let ocrPages = 0;
 
   for (let i = 1; i <= total; i++) {
     const page = await pdf.getPage(i);
-    pages.push(await convertPdfPage(page));
+    const { md, chars } = await convertPdfPage(page);
+    let fragment = md;
+
+    // A page with essentially no extractable text is image-based. If OCR is
+    // enabled, rasterize it and read the text off the pixels instead.
+    if (chars < 8 && optOcr.checked) {
+      setProgress(fileIndex / fileCount, `OCR ${file.name} — page ${i} of ${total}…`);
+      const text = await ocrPdfPage(page);
+      if (text) {
+        fragment = tidy(text);
+        ocrPages++;
+      }
+    }
+
+    pages.push(fragment);
     page.cleanup();
     await new Promise((r) => setTimeout(r, 0)); // stay responsive on large PDFs
   }
 
   let md = pages.join(optPageBreaks.checked ? "\n\n---\n\n" : "\n\n");
   md = tidy(md);
-  return { markdown: md, meta: `PDF · ${total} page${total > 1 ? "s" : ""}` };
+  const meta =
+    `PDF · ${total} page${total > 1 ? "s" : ""}` + (ocrPages ? ` · ${ocrPages} OCR'd` : "");
+  return { markdown: md, meta };
+}
+
+// Render a PDF page to a canvas and OCR it.
+async function ocrPdfPage(page) {
+  const base = page.getViewport({ scale: 1 });
+  // Aim for ~1600px on the long edge — enough resolution for OCR accuracy.
+  const scale = Math.min(3, Math.max(1.5, 1600 / Math.max(base.width, base.height)));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return ocrImageSource(canvas);
 }
 
 // Convert a single page's text content into a Markdown fragment.
@@ -212,7 +294,8 @@ async function convertPdfPage(page) {
 
   if (!rawLines.length) {
     // No extractable text — likely a scanned/image-only page.
-    return optImageMarks.checked ? "*(no extractable text on this page)*" : "";
+    const md = optImageMarks.checked ? "*(no extractable text on this page)*" : "";
+    return { md, chars: 0 };
   }
 
   // Top-to-bottom, then left-to-right within each line.
@@ -269,7 +352,8 @@ async function convertPdfPage(page) {
     prevSize = line.size;
   }
 
-  return out.join("\n");
+  const chars = lines.reduce((n, l) => n + l.text.replace(/\s/g, "").length, 0);
+  return { md: out.join("\n"), chars };
 }
 
 // --- Rendering results -------------------------------------------------
@@ -414,7 +498,7 @@ function mode(nums) {
 }
 
 function setProgress(fraction, label) {
-  progressFill.style.width = `${Math.round(fraction * 100)}%`;
+  if (fraction != null) progressFill.style.width = `${Math.round(fraction * 100)}%`;
   if (label) progressLabel.textContent = label;
 }
 

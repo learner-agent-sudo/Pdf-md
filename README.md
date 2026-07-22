@@ -1,13 +1,15 @@
 # PDF / Word → Markdown
 
-A tiny, self-contained website that converts **PDF and Word (`.docx`)** files
-into Markdown (`.md`) — handy for feeding large documents into Claude or other
-tools. Drop in several files at once and download them individually or as a zip.
+A tiny, self-contained website that converts **PDF, Word (`.docx`), and image**
+files into Markdown (`.md`) — handy for feeding large documents into Claude or
+other tools. Drop in several files at once and download them individually or as
+a zip. Scanned/image files can be read with optional **OCR**.
 
 **Everything runs in your browser, offline.** Files are read locally with
-Mozilla's [pdf.js](https://mozilla.github.io/pdf.js/) (PDF) and
+Mozilla's [pdf.js](https://mozilla.github.io/pdf.js/) (PDF),
 [mammoth.js](https://github.com/mwilliamson/mammoth.js) +
-[Turndown](https://github.com/mixmark-io/turndown) (Word) — all bundled into
+[Turndown](https://github.com/mixmark-io/turndown) (Word), and
+[Tesseract.js](https://github.com/naptha/tesseract.js) (OCR) — all bundled into
 this repo, so there are **no external network calls at all**. The page also
 ships a strict Content-Security-Policy that forbids any outbound connection, so
 the browser will physically refuse to upload your files. This matters for
@@ -48,6 +50,10 @@ Then:
 - **Insert page-break markers** *(PDF)* — adds a `---` between pages.
 - **Mark image/signature regions** — flags images/signatures with a marker
   instead of dropping them silently (applies to both PDF and Word).
+- **OCR scanned pages & images** *(off by default)* — reads text off image
+  pixels using Tesseract.js. Turn this on for scanned PDFs and image files.
+  It's **English-only** and noticeably slower (a few seconds per page), so
+  leave it off for normal text PDFs.
 
 ## What converts well (and what doesn't)
 
@@ -55,14 +61,20 @@ Then:
 | -------------------------------- | -------------------------------------------------- |
 | Text-based PDFs (Word, LaTeX…)   | ✅ Clean text, headings, paragraphs                 |
 | Word `.docx`                     | ✅ Headings, bold/italic, lists, and tables         |
+| Scanned PDFs / images + OCR      | ✅ Printed text extracted (turn OCR on)             |
 | Multi-column / complex PDF layout| ⚠️ Usable, but reading order may need tidying      |
 | PDF tables                       | ⚠️ Text is kept; grid structure is not rebuilt     |
+| Handwriting (even with OCR)      | ⚠️ Tesseract handles print well, handwriting poorly|
 | Old binary `.doc`                | ❌ Not supported — save as `.docx` first            |
-| Scanned pages / handwriting      | ❌ Images, not text — can't be extracted (no OCR)   |
-| Signatures (e.g. DocuSign)       | ❌ The signature image isn't text; a marker is left |
+| Signatures (e.g. DocuSign)       | ❌ A signature image isn't text; a marker is left   |
 
-If you later need scanned/handwritten PDFs, that requires OCR (a heavier,
-typically local tool) — open an issue and we can add it.
+### About OCR
+
+OCR uses [Tesseract.js](https://github.com/naptha/tesseract.js). The first time
+you run it in a session, the browser loads the engine (~3 MB WASM) and the
+English language data (~2 MB) from the local `vendor/` folder — no network. A
+scanned PDF page with no text layer is rasterized and read automatically when
+OCR is on; image files (PNG/JPG/WebP) are OCR'd whole.
 
 ## Hosting (optional)
 
@@ -89,3 +101,6 @@ Pages (a paid plan); otherwise just run it locally with the command above.
   - `mammoth.browser.min.js` — Word `.docx` → HTML
   - `turndown.js`, `turndown-plugin-gfm.js` — HTML → Markdown (with tables)
   - `jszip.min.js` — bundle multiple `.md` files into a zip
+  - `tesseract.min.js`, `tesseract-worker.min.js`,
+    `tesseract-core-simd-lstm.wasm(.js)`, `eng.traineddata.gz` — OCR engine
+    and English language data

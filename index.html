@@ -9,7 +9,10 @@
     allowed anywhere). With no remote endpoint permitted, the browser will
     refuse any attempt to upload your files off your machine.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; base-uri 'none'; form-action 'none'" />
+  <!-- 'wasm-unsafe-eval' lets the browser compile the OCR WebAssembly module.
+       It does NOT permit JavaScript eval(), and connect-src stays 'self', so
+       the no-upload guarantee is unchanged. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; base-uri 'none'; form-action 'none'" />
   <title>PDF / Word → Markdown</title>
   <!-- Empty data icon: avoids a stray /favicon.ico request. -->
   <link rel="icon" href="data:," />
@@ -20,9 +23,9 @@
     <header>
       <h1>PDF / Word&nbsp;→&nbsp;Markdown</h1>
       <p class="subtitle">
-        Drop in one or more PDF or Word (<code>.docx</code>) files, get clean
-        <code>.md</code> back. Everything runs in your browser — your files are
-        never uploaded anywhere.
+        Drop in one or more PDF, Word (<code>.docx</code>), or image files, get
+        clean <code>.md</code> back. Everything runs in your browser — your
+        files are never uploaded anywhere.
       </p>
     </header>
 
@@ -33,11 +36,11 @@
                 fill="none" stroke="currentColor" stroke-width="1.6"
                 stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <p class="drop-text">Drag &amp; drop PDF or Word files here</p>
+        <p class="drop-text">Drag &amp; drop PDF, Word, or image files here</p>
         <p class="drop-or">or</p>
         <button type="button" id="browse-btn" class="btn">Choose files</button>
         <input type="file" id="file-input"
-               accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+               accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
                multiple hidden />
       </div>
     </section>
@@ -54,6 +57,10 @@
       <label class="opt">
         <input type="checkbox" id="opt-imagemarks" checked />
         Mark image/signature regions
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="opt-ocr" />
+        OCR scanned pages &amp; images <span class="opt-note">(slow, English)</span>
       </label>
     </section>
 
@@ -73,10 +80,11 @@
 
     <footer>
       <p>
-        Text-based PDFs and <code>.docx</code> files convert cleanly. Scanned
-        pages, handwriting, and signatures are images, not text — they can't be
-        extracted without OCR. The old binary <code>.doc</code> format isn't
-        supported (save it as <code>.docx</code> first).
+        Text-based PDFs and <code>.docx</code> files convert cleanly. Enable
+        <strong>OCR</strong> to read scanned/image PDFs and image files
+        (printed text works well; handwriting and signatures do not). OCR is
+        English-only and noticeably slower. The old binary <code>.doc</code>
+        format isn't supported (save it as <code>.docx</code> first).
       </p>
     </footer>
   </main>
@@ -87,6 +95,7 @@
   <script src="vendor/turndown.js"></script>
   <script src="vendor/turndown-plugin-gfm.js"></script>
   <script src="vendor/jszip.min.js"></script>
+  <script src="vendor/tesseract.min.js"></script>
 
   <!-- App logic (ES module; imports pdf.js from vendor/) -->
   <script src="app.js" type="module"></script>
