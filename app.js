@@ -75,11 +75,16 @@ dropZone.addEventListener("keydown", (e) => {
 
 downloadAllBtn.addEventListener("click", downloadAllZip);
 
+// Output format is a download-time choice: re-render existing results so their
+// buttons/filenames update the moment the selector changes.
+optFormat.addEventListener("change", () => {
+  if (results.length) renderResults();
+});
+
 // --- Batch flow --------------------------------------------------------
 async function handleFiles(fileList) {
   hideError();
   const files = [...fileList];
-  const format = optFormat.value; // 'md' | 'docx', fixed for this batch
   results = [];
   resultsEl.innerHTML = "";
   resultsHead.hidden = true;
@@ -113,8 +118,6 @@ async function handleFiles(fileList) {
     }
   }
 
-  for (const r of results) if (r.ok) r.format = format;
-
   await disposeOcrWorker(); // free the OCR worker once the batch is done
   setProgress(1, "Done");
   progressWrap.hidden = true;
@@ -124,7 +127,7 @@ async function handleFiles(fileList) {
 // Produce the downloadable file for a result in its chosen format. The docx
 // blob is generated on demand and cached on the result object.
 async function fileFor(r) {
-  if (r.format === "docx") {
+  if (optFormat.value === "docx") {
     if (!r._docxBlob) r._docxBlob = await markdownToDocxBlob(r.markdown);
     return { blob: r._docxBlob, name: `${r.baseName}.docx` };
   }
@@ -377,6 +380,7 @@ async function convertPdfPage(page) {
 // --- Rendering results -------------------------------------------------
 function renderResults() {
   resultsEl.innerHTML = "";
+  const format = optFormat.value; // live: reflects the current selector
   const okCount = results.filter((r) => r.ok).length;
 
   resultsHead.hidden = false;
@@ -391,7 +395,7 @@ function renderResults() {
     const bar = document.createElement("div");
     bar.className = "card-bar";
 
-    const ext = r.format === "docx" ? "docx" : "md";
+    const ext = format === "docx" ? "docx" : "md";
     const name = document.createElement("span");
     name.className = "card-name";
     name.textContent = r.ok ? `${r.baseName}.${ext}  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
@@ -422,7 +426,7 @@ function renderResults() {
       dlBtn.addEventListener("click", async () => {
         dlBtn.disabled = true;
         const original = dlBtn.textContent;
-        if (r.format === "docx") dlBtn.textContent = "Building…";
+        if (format === "docx") dlBtn.textContent = "Building…";
         try {
           const { blob, name: fname } = await fileFor(r);
           downloadBlob(blob, fname);
