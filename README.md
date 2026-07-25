@@ -86,8 +86,18 @@ OCR is on; image files (PNG/JPG/WebP) are OCR'd whole.
 
 ## Hosting (optional)
 
-To get a shareable link instead of running a local server, enable **GitHub
-Pages** (Settings → Pages → deploy from branch). The site is fully static.
+This repo includes a GitHub Actions workflow
+(`.github/workflows/deploy-pages.yml`) that publishes the site to **GitHub
+Pages** automatically on every push to `main`.
+
+**One-time setup:** in the repo, go to **Settings → Pages** and set
+**Source → GitHub Actions**. After the next push (or a manual run from the
+**Actions** tab), the site is live at
+`https://<your-user>.github.io/<repo>/`. The workflow re-deploys on each push,
+so the link always reflects the latest code.
+
+Prefer no hosting at all? The site is fully static — just run the local server
+described above.
 
 ### Is it safe to host publicly?
 
