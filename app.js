@@ -9,6 +9,7 @@
 // and everything can be downloaded together as a .zip.
 
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
+import { markdownToDocxBlob } from "./md-to-docx.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
 // Globals provided by the vendored classic scripts (loaded before this module).
@@ -38,6 +39,7 @@ const optHeadings = document.getElementById("opt-headings");
 const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 const optOcr = document.getElementById("opt-ocr");
+const optFormat = document.getElementById("opt-format");
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
 let ocrWorker = null; // lazily created, reused across a batch
@@ -77,6 +79,7 @@ downloadAllBtn.addEventListener("click", downloadAllZip);
 async function handleFiles(fileList) {
   hideError();
   const files = [...fileList];
+  const format = optFormat.value; // 'md' | 'docx', fixed for this batch
   results = [];
   resultsEl.innerHTML = "";
   resultsHead.hidden = true;
@@ -110,10 +113,25 @@ async function handleFiles(fileList) {
     }
   }
 
+  for (const r of results) if (r.ok) r.format = format;
+
   await disposeOcrWorker(); // free the OCR worker once the batch is done
   setProgress(1, "Done");
   progressWrap.hidden = true;
   renderResults();
+}
+
+// Produce the downloadable file for a result in its chosen format. The docx
+// blob is generated on demand and cached on the result object.
+async function fileFor(r) {
+  if (r.format === "docx") {
+    if (!r._docxBlob) r._docxBlob = await markdownToDocxBlob(r.markdown);
+    return { blob: r._docxBlob, name: `${r.baseName}.docx` };
+  }
+  return {
+    blob: new Blob([r.markdown], { type: "text/markdown;charset=utf-8" }),
+    name: `${r.baseName}.md`,
+  };
 }
 
 function detectKind(file) {
@@ -373,9 +391,10 @@ function renderResults() {
     const bar = document.createElement("div");
     bar.className = "card-bar";
 
+    const ext = r.format === "docx" ? "docx" : "md";
     const name = document.createElement("span");
     name.className = "card-name";
-    name.textContent = r.ok ? `${r.baseName}.md  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
+    name.textContent = r.ok ? `${r.baseName}.${ext}  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
     bar.appendChild(name);
 
     if (r.ok) {
@@ -399,13 +418,22 @@ function renderResults() {
 
       const dlBtn = document.createElement("button");
       dlBtn.className = "btn";
-      dlBtn.textContent = "Download .md";
-      dlBtn.addEventListener("click", () =>
-        downloadBlob(
-          new Blob([r.markdown], { type: "text/markdown;charset=utf-8" }),
-          `${r.baseName}.md`
-        )
-      );
+      dlBtn.textContent = `Download .${ext}`;
+      dlBtn.addEventListener("click", async () => {
+        dlBtn.disabled = true;
+        const original = dlBtn.textContent;
+        if (r.format === "docx") dlBtn.textContent = "Building…";
+        try {
+          const { blob, name: fname } = await fileFor(r);
+          downloadBlob(blob, fname);
+        } catch (err) {
+          console.error(err);
+          showError(`Couldn't build the .docx: ${err.message || err}`);
+        } finally {
+          dlBtn.textContent = original;
+          dlBtn.disabled = false;
+        }
+      });
 
       actions.append(copyBtn, dlBtn);
       bar.appendChild(actions);
@@ -432,23 +460,35 @@ function renderResults() {
 }
 
 async function downloadAllZip() {
-  const zip = new JSZip();
-  const used = new Map();
-  for (const r of results) {
-    if (!r.ok) continue;
-    // Avoid clobbering when two inputs share a base name.
-    let name = `${r.baseName}.md`;
-    if (used.has(name)) {
-      const n = used.get(name) + 1;
-      used.set(name, n);
-      name = `${r.baseName} (${n}).md`;
-    } else {
-      used.set(name, 1);
+  downloadAllBtn.disabled = true;
+  const label = downloadAllBtn.textContent;
+  downloadAllBtn.textContent = "Building…";
+  try {
+    const zip = new JSZip();
+    const used = new Map();
+    for (const r of results) {
+      if (!r.ok) continue;
+      const { blob, name } = await fileFor(r);
+      // Avoid clobbering when two inputs share a base name.
+      let unique = name;
+      if (used.has(name)) {
+        const n = used.get(name) + 1;
+        used.set(name, n);
+        unique = name.replace(/(\.[^.]+)$/, ` (${n})$1`);
+      } else {
+        used.set(name, 1);
+      }
+      zip.file(unique, blob);
     }
-    zip.file(name, r.markdown);
+    const blob = await zip.generateAsync({ type: "blob" });
+    downloadBlob(blob, "converted-files.zip");
+  } catch (err) {
+    console.error(err);
+    showError(`Couldn't build the zip: ${err.message || err}`);
+  } finally {
+    downloadAllBtn.textContent = label;
+    downloadAllBtn.disabled = false;
   }
-  const blob = await zip.generateAsync({ type: "blob" });
-  downloadBlob(blob, "markdown-files.zip");
 }
 
 // --- Helpers -----------------------------------------------------------

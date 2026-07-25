@@ -1,19 +1,22 @@
 # PDF / Word → Markdown
 
 A tiny, self-contained website that converts **PDF, Word (`.docx`), and image**
-files into Markdown (`.md`) — handy for feeding large documents into Claude or
-other tools. Drop in several files at once and download them individually or as
-a zip. Scanned/image files can be read with optional **OCR**.
+files into **Markdown (`.md`) or Word (`.docx`)** — handy for feeding large
+documents into Claude or editing them further. Drop in several files at once
+and download them individually or as a zip. Scanned/image files can be read
+with optional **OCR**.
 
 **Everything runs in your browser, offline.** Files are read locally with
 Mozilla's [pdf.js](https://mozilla.github.io/pdf.js/) (PDF),
 [mammoth.js](https://github.com/mwilliamson/mammoth.js) +
-[Turndown](https://github.com/mixmark-io/turndown) (Word), and
-[Tesseract.js](https://github.com/naptha/tesseract.js) (OCR) — all bundled into
-this repo, so there are **no external network calls at all**. The page also
-ships a strict Content-Security-Policy that forbids any outbound connection, so
-the browser will physically refuse to upload your files. This matters for
-documents containing signatures or private data.
+[Turndown](https://github.com/mixmark-io/turndown) (Word in),
+[Tesseract.js](https://github.com/naptha/tesseract.js) (OCR), and
+[marked](https://github.com/markedjs/marked) +
+[docx](https://github.com/dolanmiu/docx) (Word out) — all bundled into this
+repo, so there are **no external network calls at all**. The page also ships a
+strict Content-Security-Policy that forbids any outbound connection, so the
+browser will physically refuse to upload your files. This matters for documents
+containing signatures or private data.
 
 ## How to use it
 
@@ -41,10 +44,15 @@ Then:
 2. Wait for the progress bar (each file is processed in turn; large PDFs go
    page by page).
 3. Each file gets its own result card — click **Download .md** or **Copy**.
-   With two or more files, **Download all (.zip)** saves them together.
+   With two or more files, **Download all (.zip)** saves them together. The
+   download format follows the **Output** setting (`.md` or `.docx`).
 
 ## Options
 
+- **Output** — choose **Markdown (`.md`)** or **Word (`.docx`)**. Word output
+  is a genuine OOXML document (real headings, bold/italic, lists, and tables)
+  that opens in Word, Google Docs, LibreOffice, and Pages — not an HTML file
+  renamed to `.docx`.
 - **Detect headings from font sizes** *(PDF)* — bigger text becomes `#`, `##`,
   `###`. Word headings come straight from the document's own styles.
 - **Insert page-break markers** *(PDF)* — adds a `---` between pages.
@@ -94,7 +102,8 @@ Pages (a paid plan); otherwise just run it locally with the command above.
 ## Files
 
 - `index.html` — page, UI, and Content-Security-Policy
-- `app.js` — drag/drop, batch handling, PDF & Word → Markdown logic
+- `app.js` — drag/drop, batch handling, PDF/Word/image → Markdown logic
+- `md-to-docx.js` — Markdown → real OOXML `.docx` (via marked + docx)
 - `style.css` — styling
 - `vendor/` — bundled libraries, all local (no CDN):
   - `pdf.min.mjs`, `pdf.worker.min.mjs` — pdf.js (PDF parsing)
@@ -104,3 +113,4 @@ Pages (a paid plan); otherwise just run it locally with the command above.
   - `tesseract.min.js`, `tesseract-worker.min.js`,
     `tesseract-core-simd-lstm.wasm(.js)`, `eng.traineddata.gz` — OCR engine
     and English language data
+  - `marked.umd.js` — Markdown parser, and `docx.umd.js` — Word `.docx` writer

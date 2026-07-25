@@ -23,9 +23,9 @@
     <header>
       <h1>PDF / Word&nbsp;→&nbsp;Markdown</h1>
       <p class="subtitle">
-        Drop in one or more PDF, Word (<code>.docx</code>), or image files, get
-        clean <code>.md</code> back. Everything runs in your browser — your
-        files are never uploaded anywhere.
+        Drop in one or more PDF, Word (<code>.docx</code>), or image files and
+        get clean Markdown (<code>.md</code>) or Word (<code>.docx</code>) back.
+        Everything runs in your browser — your files are never uploaded anywhere.
       </p>
     </header>
 
@@ -46,6 +46,13 @@
     </section>
 
     <section id="options" class="options">
+      <label class="opt opt-format">
+        Output:
+        <select id="opt-format">
+          <option value="md">Markdown (.md)</option>
+          <option value="docx">Word (.docx)</option>
+        </select>
+      </label>
       <label class="opt">
         <input type="checkbox" id="opt-headings" checked />
         Detect headings from font sizes <span class="opt-note">(PDF)</span>
@@ -96,6 +103,8 @@
   <script src="vendor/turndown-plugin-gfm.js"></script>
   <script src="vendor/jszip.min.js"></script>
   <script src="vendor/tesseract.min.js"></script>
+  <script src="vendor/marked.umd.js"></script>
+  <script src="vendor/docx.umd.js"></script>
 
   <!-- App logic (ES module; imports pdf.js from vendor/) -->
   <script src="app.js" type="module"></script>
