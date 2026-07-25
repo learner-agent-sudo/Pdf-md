@@ -46,13 +46,6 @@
     </section>
 
     <section id="options" class="options">
-      <label class="opt opt-format">
-        Output:
-        <select id="opt-format">
-          <option value="md">Markdown (.md)</option>
-          <option value="docx">Word (.docx)</option>
-        </select>
-      </label>
       <label class="opt">
         <input type="checkbox" id="opt-headings" checked />
         Detect headings from font sizes <span class="opt-note">(PDF)</span>
@@ -78,7 +71,14 @@
 
     <section id="results-head" class="results-head" hidden>
       <span id="results-summary" class="results-summary"></span>
-      <button type="button" id="download-all" class="btn" hidden>Download all (.zip)</button>
+      <div class="results-actions">
+        <div class="format-toggle" id="format-toggle" role="group" aria-label="Download format">
+          <span class="format-label">Download as</span>
+          <button type="button" class="seg active" data-format="md">Markdown .md</button>
+          <button type="button" class="seg" data-format="docx">Word .docx</button>
+        </div>
+        <button type="button" id="download-all" class="btn" hidden>Download all (.zip)</button>
+      </div>
     </section>
 
     <section id="results" class="results"></section>

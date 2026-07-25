@@ -39,10 +39,11 @@ const optHeadings = document.getElementById("opt-headings");
 const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 const optOcr = document.getElementById("opt-ocr");
-const optFormat = document.getElementById("opt-format");
+const formatToggle = document.getElementById("format-toggle");
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
 let ocrWorker = null; // lazily created, reused across a batch
+let outputFormat = "md"; // 'md' | 'docx' — download-time choice
 
 // --- Wiring ------------------------------------------------------------
 browseBtn.addEventListener("click", () => fileInput.click());
@@ -75,9 +76,13 @@ dropZone.addEventListener("keydown", (e) => {
 
 downloadAllBtn.addEventListener("click", downloadAllZip);
 
-// Output format is a download-time choice: re-render existing results so their
-// buttons/filenames update the moment the selector changes.
-optFormat.addEventListener("change", () => {
+// Segmented "Download as" toggle. Output format is a download-time choice, so
+// switching it just re-renders the existing results' buttons/filenames.
+formatToggle.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg");
+  if (!btn) return;
+  outputFormat = btn.dataset.format;
+  formatToggle.querySelectorAll(".seg").forEach((b) => b.classList.toggle("active", b === btn));
   if (results.length) renderResults();
 });
 
@@ -127,7 +132,7 @@ async function handleFiles(fileList) {
 // Produce the downloadable file for a result in its chosen format. The docx
 // blob is generated on demand and cached on the result object.
 async function fileFor(r) {
-  if (optFormat.value === "docx") {
+  if (outputFormat === "docx") {
     if (!r._docxBlob) r._docxBlob = await markdownToDocxBlob(r.markdown);
     return { blob: r._docxBlob, name: `${r.baseName}.docx` };
   }
@@ -380,7 +385,7 @@ async function convertPdfPage(page) {
 // --- Rendering results -------------------------------------------------
 function renderResults() {
   resultsEl.innerHTML = "";
-  const format = optFormat.value; // live: reflects the current selector
+  const format = outputFormat; // live: reflects the current toggle
   const okCount = results.filter((r) => r.ok).length;
 
   resultsHead.hidden = false;

@@ -13,6 +13,9 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute must always win, even over display:flex/grid rules. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -95,16 +98,6 @@ code {
 .opt { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .opt input { accent-color: var(--accent); }
 .opt-note { color: var(--border); font-size: 0.8rem; }
-.opt-format { gap: 6px; color: var(--text); }
-.opt-format select {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
 
 /* Progress */
 .progress-wrap { margin-top: 28px; }
@@ -132,6 +125,35 @@ code {
   flex-wrap: wrap;
 }
 .results-summary { color: var(--muted); font-size: 0.9rem; }
+.results-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* Segmented "Download as" toggle */
+.format-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+.format-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 0 10px 0 12px;
+  white-space: nowrap;
+}
+.format-toggle .seg {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-left: 1px solid var(--border);
+  padding: 8px 14px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.format-toggle .seg:hover { color: var(--text); }
+.format-toggle .seg.active { background: var(--accent); color: #fff; }
 
 .results { display: flex; flex-direction: column; gap: 20px; }
 .results:not(:empty) { margin-top: 18px; }
