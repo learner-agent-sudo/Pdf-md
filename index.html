@@ -40,9 +40,17 @@
         <p class="drop-or">or</p>
         <button type="button" id="browse-btn" class="btn">Choose files</button>
         <input type="file" id="file-input"
-               accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+               accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,.txt,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
                multiple hidden />
       </div>
+    </section>
+
+    <section id="compare-mode" class="compare-mode">
+      <label class="opt opt-compare">
+        <input type="checkbox" id="opt-compare" />
+        <span><strong>Compare 2 files</strong> → tracked-changes Word (upload the
+        original first, then the revised version)</span>
+      </label>
     </section>
 
     <section id="options" class="options">
@@ -65,6 +73,7 @@
       <label class="opt opt-lang">
         OCR language
         <select id="opt-ocr-lang">
+          <option value="auto">Auto-detect</option>
           <option value="eng">English</option>
           <option value="fra">French</option>
           <option value="deu">German</option>
@@ -121,6 +130,7 @@
   <script src="vendor/tesseract.min.js"></script>
   <script src="vendor/marked.umd.js"></script>
   <script src="vendor/docx.umd.js"></script>
+  <script src="vendor/diff.min.js"></script>
 
   <!-- App logic (ES module; imports pdf.js from vendor/) -->
   <script src="app.js" type="module"></script>

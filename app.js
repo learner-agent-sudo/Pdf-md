@@ -10,7 +10,10 @@
 
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
 import { markdownToDocxBlob } from "./md-to-docx.js";
+import { compareToDocxBlob } from "./compare.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
+
+const { Diff } = window;
 
 // Globals provided by the vendored classic scripts (loaded before this module).
 const { mammoth, TurndownService, turndownPluginGfm, JSZip, Tesseract } = window;
@@ -40,6 +43,7 @@ const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 const optOcr = document.getElementById("opt-ocr");
 const optOcrLang = document.getElementById("opt-ocr-lang");
+const optCompare = document.getElementById("opt-compare");
 const formatToggle = document.getElementById("format-toggle");
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
@@ -78,6 +82,15 @@ dropZone.addEventListener("keydown", (e) => {
 
 downloadAllBtn.addEventListener("click", downloadAllZip);
 
+// Toggling compare mode clears any stale results from the other mode.
+optCompare.addEventListener("change", () => {
+  hideError();
+  results = [];
+  resultsEl.innerHTML = "";
+  resultsHead.hidden = true;
+  dropZone.classList.toggle("compare-on", optCompare.checked);
+});
+
 // Segmented "Download as" toggle. Output format is a download-time choice, so
 // switching it just re-renders the existing results' buttons/filenames.
 formatToggle.addEventListener("click", (e) => {
@@ -97,28 +110,20 @@ async function handleFiles(fileList) {
   resultsHead.hidden = true;
   progressWrap.hidden = false;
 
+  if (optCompare.checked) {
+    await runCompare(files);
+    return;
+  }
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     setProgress(i / files.length, `Converting ${file.name} (${i + 1} of ${files.length})…`);
     await new Promise((r) => setTimeout(r, 0)); // let the UI paint
 
-    const baseName = file.name.replace(/\.(pdf|docx?)$/i, "") || "document";
+    const baseName = baseNameOf(file);
     try {
-      const kind = detectKind(file);
-      if (kind === "pdf") {
-        const { markdown, meta } = await convertPdf(file, i, files.length);
-        results.push({ baseName, markdown, meta, ok: true });
-      } else if (kind === "docx") {
-        const { markdown, meta } = await convertDocx(file);
-        results.push({ baseName, markdown, meta, ok: true });
-      } else if (kind === "image") {
-        const { markdown, meta } = await convertImage(file);
-        results.push({ baseName, markdown, meta, ok: true });
-      } else if (kind === "doc") {
-        results.push({ baseName, ok: false, error: "Old .doc format isn't supported — save it as .docx and try again." });
-      } else {
-        results.push({ baseName, ok: false, error: "Unsupported file type. Please use a PDF, .docx, or image file." });
-      }
+      const { markdown, meta } = await fileToMarkdown(file, i, files.length);
+      results.push({ baseName, markdown, meta, ok: true });
     } catch (err) {
       console.error(err);
       results.push({ baseName, ok: false, error: err.message || String(err) });
@@ -131,9 +136,79 @@ async function handleFiles(fileList) {
   renderResults();
 }
 
+function baseNameOf(file) {
+  return file.name.replace(/\.(pdf|docx?|md|markdown|txt|png|jpe?g|webp|bmp|gif)$/i, "") || "document";
+}
+
+// Convert any supported file to Markdown (throws for unsupported types).
+async function fileToMarkdown(file, i, count) {
+  const kind = detectKind(file);
+  if (kind === "pdf") return convertPdf(file, i, count);
+  if (kind === "docx") return convertDocx(file);
+  if (kind === "image") return convertImage(file);
+  if (kind === "md") return convertMarkdownFile(file);
+  if (kind === "doc") throw new Error("Old .doc format isn't supported — save it as .docx and try again.");
+  throw new Error("Unsupported file type. Please use a PDF, .docx, .md, or image file.");
+}
+
+async function convertMarkdownFile(file) {
+  const text = await file.text();
+  return { markdown: tidy(text), meta: `Markdown · ${countWords(text)} words` };
+}
+
+// --- Compare two files → tracked-changes Word --------------------------
+async function runCompare(files) {
+  if (files.length !== 2) {
+    progressWrap.hidden = true;
+    resultsHead.hidden = true;
+    showError("Comparison needs exactly 2 files — upload the original first, then the revised version.");
+    return;
+  }
+  try {
+    setProgress(0.1, `Reading ${files[0].name}…`);
+    const a = await fileToMarkdown(files[0], 0, 2);
+    setProgress(0.5, `Reading ${files[1].name}…`);
+    const b = await fileToMarkdown(files[1], 1, 2);
+    setProgress(0.85, "Building tracked-changes document…");
+    const blob = await compareToDocxBlob(a.markdown, b.markdown);
+    const baseName = `${baseNameOf(files[0])}_vs_${baseNameOf(files[1])}_changes`;
+    results = [{
+      ok: true,
+      isCompare: true,
+      baseName,
+      meta: `tracked changes · ${files[0].name} → ${files[1].name}`,
+      compareBlob: blob,
+      previewText: diffPreview(a.markdown, b.markdown),
+    }];
+  } catch (err) {
+    console.error(err);
+    results = [{ ok: false, baseName: "comparison", error: err.message || String(err) }];
+  }
+  await disposeOcrWorker();
+  setProgress(1, "Done");
+  progressWrap.hidden = true;
+  renderResults();
+}
+
+// A plain-text unified-style preview of the changes, shown on screen.
+function diffPreview(aMd, bMd) {
+  const parts = Diff.diffLines(aMd, bMd);
+  let out = "";
+  for (const p of parts) {
+    const lines = p.value.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    const mark = p.added ? "+ " : p.removed ? "- " : "  ";
+    for (const l of lines) out += mark + l + "\n";
+  }
+  return out.trim() || "(no textual differences found)";
+}
+
 // Produce the downloadable file for a result in its chosen format. The docx
 // blob is generated on demand and cached on the result object.
 async function fileFor(r) {
+  if (r.isCompare) {
+    return { blob: r.compareBlob, name: `${r.baseName}.docx` };
+  }
   if (outputFormat === "docx") {
     if (!r._docxBlob) r._docxBlob = await markdownToDocxBlob(r.markdown);
     return { blob: r._docxBlob, name: `${r.baseName}.docx` };
@@ -149,16 +224,16 @@ function detectKind(file) {
   if (n.endsWith(".pdf") || file.type === "application/pdf") return "pdf";
   if (n.endsWith(".docx")) return "docx";
   if (n.endsWith(".doc")) return "doc";
+  if (/\.(md|markdown|txt)$/.test(n)) return "md";
   if (/\.(png|jpe?g|webp|bmp|gif)$/.test(n) || file.type.startsWith("image/")) return "image";
   return "unknown";
 }
 
 // --- OCR (Tesseract.js) ------------------------------------------------
-// One worker is created on first use and reused while the language is
-// unchanged. If the user picks a different OCR language, the old worker is
-// torn down and a new one created for that language.
-async function getOcrWorker() {
-  const lang = optOcrLang.value || "eng";
+// One worker is created per language string and reused while that string is
+// unchanged. A different language (or a different auto-detected combination)
+// tears the worker down and creates a new one.
+async function ensureOcrWorker(lang) {
   if (ocrWorker && ocrWorkerLang === lang) return ocrWorker;
   await disposeOcrWorker();
   ocrWorker = await Tesseract.createWorker(lang, 1, OCR_PATHS);
@@ -177,10 +252,71 @@ async function disposeOcrWorker() {
   ocrWorkerLang = null;
 }
 
-async function ocrImageSource(source) {
-  const worker = await getOcrWorker();
+// Raw recognize in a specific language string; returns text + mean confidence.
+async function ocrRecognize(source, lang) {
+  const worker = await ensureOcrWorker(lang);
   const { data } = await worker.recognize(source);
-  return (data.text || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { text: data.text || "", confidence: data.confidence || 0 };
+}
+
+function cleanOcrText(text) {
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+async function ocrImageSource(source, lang) {
+  const { text } = await ocrRecognize(source, lang);
+  return cleanOcrText(text);
+}
+
+// Resolve which Tesseract language(s) to use. When the user picks "Auto-detect"
+// we probe the image: an English pass tells us if the script is Latin (then a
+// small heuristic picks the European language), otherwise a combined CJK pass
+// tells us whether it's Chinese, Japanese, or Korean. English is always kept in
+// the mix so mixed-language pages work.
+async function resolveOcrLang(source) {
+  const choice = optOcrLang.value || "auto";
+  if (choice !== "auto") return choice;
+
+  const probe = await ocrRecognize(source, "eng");
+  const nonSpace = probe.text.replace(/\s/g, "");
+  const ascii = (probe.text.match(/[A-Za-z]/g) || []).length;
+  const latinScore = nonSpace.length ? ascii / nonSpace.length : 0;
+
+  if (probe.confidence >= 60 && latinScore >= 0.55) {
+    return detectLatinLang(probe.text); // 'eng' or e.g. 'fra+eng'
+  }
+
+  // Non-Latin script: probe with the CJK languages to see which one.
+  const cjk = await ocrRecognize(source, "eng+chi_sim+jpn+kor");
+  const t = cjk.text;
+  if (/[぀-ヿ]/.test(t)) return "jpn+eng"; // kana → Japanese
+  if (/[가-힣]/.test(t)) return "kor+eng"; // hangul → Korean
+  if (/[㐀-鿿豈-﫿]/.test(t)) return "chi_sim+eng"; // Han → Chinese
+  return "eng"; // fell through: treat as English
+}
+
+// Lightweight European-language guess from OCR'd Latin text, via diacritics and
+// common stop-words. Returns 'eng' or '<lang>+eng'.
+function detectLatinLang(text) {
+  const t = " " + text.toLowerCase().replace(/\s+/g, " ") + " ";
+  const score = { fra: 0, deu: 0, spa: 0, ita: 0, por: 0 };
+  if (/[àâçéèêëîïôûù]/.test(text)) score.fra += 2;
+  if (/[äöüß]/.test(text)) score.deu += 3;
+  if (/[ñ¿¡]/.test(text)) score.spa += 3;
+  if (/[ãõ]/.test(text)) score.por += 2;
+  const stop = {
+    fra: [" le ", " la ", " les ", " des ", " et ", " une ", " est ", " pour ", " dans ", " du ", " qui "],
+    deu: [" der ", " die ", " das ", " und ", " ist ", " nicht ", " mit ", " ein ", " auch ", " sich "],
+    spa: [" el ", " los ", " las ", " que ", " una ", " para ", " con ", " por ", " como ", " pero "],
+    ita: [" il ", " lo ", " gli ", " che ", " di ", " per ", " una ", " sono ", " non ", " della "],
+    por: [" os ", " as ", " uma ", " para ", " com ", " não ", " dos ", " uma ", " mais ", " são "],
+  };
+  for (const l in stop) for (const w of stop[l]) if (t.includes(w)) score[l] += 1;
+
+  let best = "eng";
+  let bestScore = 2; // require a clear signal to override English
+  for (const l in score) if (score[l] > bestScore) { bestScore = score[l]; best = l; }
+  return best === "eng" ? "eng" : `${best}+eng`;
 }
 
 // Convert a whole image file to Markdown via OCR.
@@ -191,9 +327,11 @@ async function convertImage(file) {
       meta: "image · OCR off",
     };
   }
-  setProgress(null, `OCR ${file.name}…`);
-  const text = await ocrImageSource(file);
-  return { markdown: tidy(text || "*(no text found in image)*"), meta: `image · OCR` };
+  setProgress(null, `Detecting language in ${file.name}…`);
+  const lang = await resolveOcrLang(file);
+  setProgress(null, `OCR ${file.name} (${lang})…`);
+  const text = await ocrImageSource(file, lang);
+  return { markdown: tidy(text || "*(no text found in image)*"), meta: `image · OCR (${lang})` };
 }
 
 // --- DOCX → Markdown ---------------------------------------------------
@@ -260,6 +398,7 @@ async function convertPdf(file, fileIndex, fileCount) {
   const pages = [];
   let ocrPages = 0;
   let failedPages = 0;
+  let ocrLang = null; // resolved once per file, then reused
 
   try {
     for (let i = 1; i <= total; i++) {
@@ -277,8 +416,13 @@ async function convertPdf(file, fileIndex, fileCount) {
         // OCR when the page is image-based (no text) or the extracted text is
         // garbled (e.g. a CJK font with no ToUnicode map), if OCR is enabled.
         if ((chars < 8 || garbled) && optOcr.checked) {
-          setProgress((fileIndex + i / total) / fileCount, `OCR ${file.name} — page ${i} of ${total}…`);
-          const text = await ocrPdfPage(page);
+          const canvas = await renderPdfPageToCanvas(page);
+          if (ocrLang === null) {
+            setProgress((fileIndex + i / total) / fileCount, `Detecting language in ${file.name}…`);
+            ocrLang = await resolveOcrLang(canvas);
+          }
+          setProgress((fileIndex + i / total) / fileCount, `OCR ${file.name} — page ${i} of ${total} (${ocrLang})…`);
+          const text = await ocrImageSource(canvas, ocrLang);
           if (text) {
             fragment = tidy(text);
             ocrPages++;
@@ -305,13 +449,13 @@ async function convertPdf(file, fileIndex, fileCount) {
   md = tidy(md);
   const meta =
     `PDF · ${total} page${total > 1 ? "s" : ""}` +
-    (ocrPages ? ` · ${ocrPages} OCR'd` : "") +
+    (ocrPages ? ` · ${ocrPages} OCR'd${ocrLang ? ` (${ocrLang})` : ""}` : "") +
     (failedPages ? ` · ${failedPages} unreadable` : "");
   return { markdown: md, meta };
 }
 
-// Render a PDF page to a canvas and OCR it.
-async function ocrPdfPage(page) {
+// Render a PDF page to a canvas (for OCR).
+async function renderPdfPageToCanvas(page) {
   const base = page.getViewport({ scale: 1 });
   // Aim for ~1600px on the long edge — enough resolution for OCR accuracy.
   const scale = Math.min(3, Math.max(1.5, 1600 / Math.max(base.width, base.height)));
@@ -321,7 +465,7 @@ async function ocrPdfPage(page) {
   canvas.height = Math.ceil(viewport.height);
   const ctx = canvas.getContext("2d");
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return ocrImageSource(canvas);
+  return canvas;
 }
 
 // Convert a single page's text content into a Markdown fragment.
@@ -439,21 +583,26 @@ function isCJK(ch) {
 function renderResults() {
   resultsEl.innerHTML = "";
   const format = outputFormat; // live: reflects the current toggle
+  const compareMode = results.some((r) => r.isCompare);
   const okCount = results.filter((r) => r.ok).length;
 
   resultsHead.hidden = false;
-  resultsSummary.textContent =
-    `${okCount} of ${results.length} file${results.length > 1 ? "s" : ""} converted`;
+  // The .md/.docx toggle is irrelevant for a comparison (always a Word redline).
+  formatToggle.hidden = compareMode;
+  resultsSummary.textContent = compareMode
+    ? (okCount ? "Comparison ready" : "Comparison failed")
+    : `${okCount} of ${results.length} file${results.length > 1 ? "s" : ""} converted`;
   downloadAllBtn.hidden = okCount < 2;
 
-  results.forEach((r, idx) => {
+  results.forEach((r) => {
     const card = document.createElement("div");
     card.className = "card" + (r.ok ? "" : " card-error");
 
     const bar = document.createElement("div");
     bar.className = "card-bar";
 
-    const ext = format === "docx" ? "docx" : "md";
+    const ext = r.isCompare || format === "docx" ? "docx" : "md";
+    const previewText = r.isCompare ? r.previewText : r.markdown;
     const name = document.createElement("span");
     name.className = "card-name";
     name.textContent = r.ok ? `${r.baseName}.${ext}  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
@@ -468,7 +617,7 @@ function renderResults() {
       copyBtn.textContent = "Copy";
       copyBtn.addEventListener("click", async () => {
         try {
-          await navigator.clipboard.writeText(r.markdown);
+          await navigator.clipboard.writeText(previewText);
         } catch {
           const ta = card.querySelector("textarea");
           ta.select();
@@ -484,7 +633,7 @@ function renderResults() {
       dlBtn.addEventListener("click", async () => {
         dlBtn.disabled = true;
         const original = dlBtn.textContent;
-        if (format === "docx") dlBtn.textContent = "Building…";
+        if (ext === "docx" && !r.isCompare) dlBtn.textContent = "Building…";
         try {
           const { blob, name: fname } = await fileFor(r);
           downloadBlob(blob, fname);
@@ -503,12 +652,20 @@ function renderResults() {
 
     card.appendChild(bar);
 
+    if (r.ok && r.isCompare) {
+      const note = document.createElement("p");
+      note.className = "card-note";
+      note.textContent =
+        "Open the .docx in Word, Google Docs, or LibreOffice with Track Changes to accept/reject edits. Preview below shows added (+) and removed (−) lines.";
+      card.appendChild(note);
+    }
+
     if (r.ok) {
       const ta = document.createElement("textarea");
       ta.className = "output";
       ta.readOnly = true;
       ta.spellcheck = false;
-      ta.value = r.markdown;
+      ta.value = previewText;
       card.appendChild(ta);
     } else {
       const msg = document.createElement("p");

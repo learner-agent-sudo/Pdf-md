@@ -60,10 +60,13 @@ Then:
   instead of dropping them silently (applies to both PDF and Word).
 - **OCR scanned pages & images** *(off by default)* — reads text off image
   pixels using Tesseract.js. Turn this on for scanned PDFs and image files.
-  Pick the **OCR language** (English, French, German, Spanish, Italian,
-  Portuguese, Chinese Simplified/Traditional, Japanese, Korean). It's
-  noticeably slower (a few seconds per page), so leave it off for normal
-  text PDFs.
+  The **OCR language** defaults to **Auto-detect** (handles pages that mix
+  English with another language); you can also force a specific language
+  (English, French, German, Spanish, Italian, Portuguese, Chinese
+  Simplified/Traditional, Japanese, Korean). OCR is noticeably slower (a few
+  seconds per page), so leave it off for normal text PDFs.
+- **Compare 2 files → tracked-changes Word** — upload the original file, then
+  the revised one, to get a Word `.docx` **redline** (see below).
 
 ## What converts well (and what doesn't)
 
@@ -89,6 +92,32 @@ Only the selected language is downloaded. A scanned PDF page with no text layer
 (or one whose text is garbled because its font lacks a Unicode map) is
 rasterized and read automatically when OCR is on; image files (PNG/JPG/WebP)
 are OCR'd whole.
+
+### Auto-detect language
+
+With OCR set to **Auto-detect**, the tool runs a quick English probe on the
+first page needing OCR. If the script is Latin, a small heuristic (accents +
+common words) picks the European language; otherwise a combined pass decides
+between Chinese, Japanese, and Korean. English is always kept in the mix, so
+pages that mix English with Chinese/French still read correctly. For a document
+in one known language, forcing that language in the dropdown is fastest and most
+accurate.
+
+## Comparing two files (track changes)
+
+Tick **Compare 2 files** and upload the **original** first, then the **revised**
+version (each may be PDF, Word `.docx`, `.md`, or `.txt`). The tool produces a
+single Word `.docx` with real **tracked changes** (`<w:ins>` / `<w:del>`) that
+you accept or reject in Word, Google Docs, or LibreOffice, plus an on-screen
+`+`/`−` preview.
+
+Both files are reduced to their text/structure first, so the redline preserves
+**heading levels (relative font sizes), bullets, and numbered lists**, and
+compares word by word (character by character for Chinese/Japanese). It does not
+reproduce exact fonts, colors, or absolute point sizes — for a pixel-perfect
+compare of two Word files, Word's own *Review → Compare* is still the tool. This
+is ideal for a quick, portable redline across mixed formats (e.g. a PDF vs. a
+Word draft).
 
 ### Long documents
 
@@ -125,8 +154,9 @@ Pages (a paid plan); otherwise just run it locally with the command above.
 ## Files
 
 - `index.html` — page, UI, and Content-Security-Policy
-- `app.js` — drag/drop, batch handling, PDF/Word/image → Markdown logic
+- `app.js` — drag/drop, batch handling, PDF/Word/image/MD → Markdown logic
 - `md-to-docx.js` — Markdown → real OOXML `.docx` (via marked + docx)
+- `compare.js` — two-file diff → tracked-changes `.docx` (via marked + diff + docx)
 - `style.css` — styling
 - `vendor/` — bundled libraries, all local (no CDN):
   - `pdf.min.mjs`, `pdf.worker.min.mjs` — pdf.js (PDF parsing)
@@ -138,3 +168,4 @@ Pages (a paid plan); otherwise just run it locally with the command above.
   - `*.traineddata.gz` — OCR language data (eng, fra, deu, spa, ita, por,
     chi_sim, chi_tra, jpn, kor)
   - `marked.umd.js` — Markdown parser, and `docx.umd.js` — Word `.docx` writer
+  - `diff.min.js` — text diffing for the two-file comparison
