@@ -111,13 +111,20 @@ single Word `.docx` with real **tracked changes** (`<w:ins>` / `<w:del>`) that
 you accept or reject in Word, Google Docs, or LibreOffice, plus an on-screen
 `+`/`−` preview.
 
-Both files are reduced to their text/structure first, so the redline preserves
-**heading levels (relative font sizes), bullets, and numbered lists**, and
-compares word by word (character by character for Chinese/Japanese). It does not
-reproduce exact fonts, colors, or absolute point sizes — for a pixel-perfect
-compare of two Word files, Word's own *Review → Compare* is still the tool. This
-is ideal for a quick, portable redline across mixed formats (e.g. a PDF vs. a
-Word draft).
+The redline preserves the formatting that survives conversion — **heading
+levels (relative font sizes), bullets, numbered lists, and bold / italic /
+inline-code** — and carries that styling onto the tracked changes themselves
+(a changed bold word stays bold in both its deletion and its insertion). It
+compares word by word (character by character for Chinese/Japanese).
+
+What it can't reproduce is formatting that Markdown doesn't carry: exact fonts,
+colors, and absolute point sizes. Those would require parsing the Word OOXML
+run-by-run (a Word-only path). For a pixel-perfect compare of two `.docx`
+files, Word's own *Review → Compare* is still the specialist; this tool's edge
+is a quick, portable redline **across mixed formats** (e.g. a PDF vs. a Word
+draft), which Word can't do. Note also that a change to *formatting alone*
+(identical words, different styling) is applied in the output but not marked as
+a separate tracked revision.
 
 ### Long documents
 

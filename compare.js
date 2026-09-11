@@ -2,11 +2,17 @@
 //
 // Both inputs arrive as Markdown (the app converts PDF/Word/MD to Markdown
 // first). We lex each into block-level units (headings, paragraphs, list
-// items, tables, code), diff the block sequences, and within a changed block
-// diff word-by-word. Output uses docx InsertedTextRun / DeletedTextRun so Word,
-// Google Docs, and LibreOffice show it as an accept/reject redline. Structure
-// that carries formatting — heading level (font size), bullets, numbering — is
-// preserved on each block.
+// items, tables, code) and, crucially, keep each block's inline formatting as
+// a list of styled runs (bold / italic / strikethrough / inline-code) rather
+// than flattening to plain text. We diff the block sequences, and within a
+// changed block diff word-by-word (character-by-character for CJK), carrying
+// each fragment's formatting into the output. Output uses docx InsertedTextRun
+// / DeletedTextRun so Word, Google Docs, and LibreOffice show it as an
+// accept/reject redline.
+//
+// Preserved: heading level (relative font size), bullets, numbering, and
+// bold/italic/code. Not preserved (not present in Markdown): exact point
+// sizes, colors, and fonts.
 
 const { marked, docx, Diff } = window;
 
@@ -38,7 +44,6 @@ export async function compareToDocxBlob(oldMd, newMd) {
     } else if (part.removed) {
       const next = parts[i + 1];
       if (next && next.added) {
-        // A modification: pair old blocks with new blocks positionally.
         const olds = part.value;
         const news = next.value;
         const n = Math.max(olds.length, news.length);
@@ -69,7 +74,7 @@ export async function compareToDocxBlob(oldMd, newMd) {
   return d.Packer.toBlob(doc);
 }
 
-// --- Block extraction --------------------------------------------------
+// --- Block extraction (keeps inline styling) ---------------------------
 function extractBlocks(md) {
   const toks = marked.lexer(md || "");
   const blocks = [];
@@ -78,20 +83,23 @@ function extractBlocks(md) {
 }
 
 function pushBlock(t, blocks, level) {
+  const add = (kind, runs, extra = {}) =>
+    blocks.push({ kind, runs, text: runs.map((r) => r.text).join(""), ...extra });
+
   switch (t.type) {
     case "space":
       break;
     case "heading":
-      blocks.push({ kind: "heading", depth: t.depth, text: inlineText(t.tokens) });
+      add("heading", inlineRuns(t.tokens), { depth: t.depth });
       break;
     case "paragraph":
-      blocks.push({ kind: "para", text: inlineText(t.tokens) });
+      add("para", inlineRuns(t.tokens));
       break;
     case "blockquote":
-      blocks.push({ kind: "quote", text: inlineText(t.tokens || []) || stripMd(t.text) });
+      add("quote", inlineRuns(t.tokens || []));
       break;
     case "code":
-      blocks.push({ kind: "code", text: String(t.text || "") });
+      add("code", [{ text: String(t.text || ""), code: true }]);
       break;
     case "list":
       for (const item of t.items) {
@@ -103,26 +111,55 @@ function pushBlock(t, blocks, level) {
           else if (c.type === "paragraph") inline.push(...c.tokens);
           else if (c.text) inline.push({ type: "text", text: c.text });
         }
-        blocks.push({ kind: "li", ordered: !!t.ordered, level, text: inlineText(inline) });
+        add("li", inlineRuns(inline), { ordered: !!t.ordered, level });
         for (const n of nested) pushBlock(n, blocks, level + 1);
       }
       break;
     case "table":
-      blocks.push({ kind: "table", token: t, text: tableText(t) });
+      blocks.push({ kind: "table", token: t, runs: [], text: tableText(t) });
       break;
     default:
-      if (t.text) blocks.push({ kind: "para", text: stripMd(t.text) });
+      if (t.text) add("para", [{ text: stripMd(t.text) }]);
   }
 }
 
-function inlineText(tokens) {
-  let s = "";
+// Flatten marked inline tokens to styled runs: { text, bold, italic, strike, code }.
+function inlineRuns(tokens, base = {}) {
+  const runs = [];
   for (const t of tokens || []) {
-    if (t.type === "br") s += " ";
-    else if (t.tokens) s += inlineText(t.tokens);
-    else if (typeof t.text === "string") s += t.text;
+    switch (t.type) {
+      case "text":
+      case "escape":
+        runs.push({ text: t.text, ...base });
+        break;
+      case "strong":
+        runs.push(...inlineRuns(t.tokens, { ...base, bold: true }));
+        break;
+      case "em":
+        runs.push(...inlineRuns(t.tokens, { ...base, italic: true }));
+        break;
+      case "del":
+        runs.push(...inlineRuns(t.tokens, { ...base, strike: true }));
+        break;
+      case "codespan":
+        runs.push({ text: t.text, ...base, code: true });
+        break;
+      case "br":
+        runs.push({ text: " ", ...base });
+        break;
+      case "link":
+        runs.push(...inlineRuns(t.tokens, base));
+        break;
+      default:
+        if (t.tokens) runs.push(...inlineRuns(t.tokens, base));
+        else if (typeof t.text === "string") runs.push({ text: t.text, ...base });
+    }
   }
-  return s.replace(/\s+/g, " ").trim();
+  return runs.length ? runs : [{ text: "" }];
+}
+
+function inlineText(tokens) {
+  return inlineRuns(tokens).map((r) => r.text).join("").replace(/\s+/g, " ").trim();
 }
 
 function tableText(t) {
@@ -138,31 +175,75 @@ function stripMd(s) {
 const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
 
 // --- Rendering ---------------------------------------------------------
-// A block with every run in one status (same / ins / del).
+// A block with every run in one status (same / ins / del), keeping styling.
 function renderBlock(blk, status, d, nextId) {
   if (blk.kind === "table") return [renderTable(blk.token, status, d, nextId)];
-  const runs = [makeRun(blk.text, status, d, nextId, runStyle(blk))];
-  return [paragraphFor(blk, runs, d)];
+  const children = blk.runs
+    .filter((r) => r.text !== "")
+    .map((r) => makeRun(r.text, status, d, nextId, r));
+  if (!children.length) children.push(makeRun("", status, d, nextId, {}));
+  return [paragraphFor(blk, children, d)];
 }
 
-// A modified block: word-level (or char-level for CJK) diff between old & new.
+// A modified block: word-level (char-level for CJK) diff, carrying styling.
 function renderModified(oldBlk, newBlk, d, nextId) {
-  // Different structure kinds, tables or code: show as delete-then-insert.
   if (oldBlk.kind !== newBlk.kind || oldBlk.kind === "table" || oldBlk.kind === "code") {
     return [...renderBlock(oldBlk, "del", d, nextId), ...renderBlock(newBlk, "ins", d, nextId)];
   }
-  const style = runStyle(newBlk);
-  const cjk = isCJKHeavy(oldBlk.text) || isCJKHeavy(newBlk.text);
-  const parts = cjk
-    ? Diff.diffChars(oldBlk.text, newBlk.text)
-    : Diff.diffWordsWithSpace(oldBlk.text, newBlk.text);
-  const runs = [];
+  const oldChars = expandToChars(oldBlk.runs);
+  const newChars = expandToChars(newBlk.runs);
+  const oldText = oldChars.map((c) => c.ch).join("");
+  const newText = newChars.map((c) => c.ch).join("");
+  const cjk = isCJKHeavy(oldText) || isCJKHeavy(newText);
+  const parts = cjk ? Diff.diffChars(oldText, newText) : Diff.diffWordsWithSpace(oldText, newText);
+
+  const groups = [];
+  let oi = 0;
+  let ni = 0;
   for (const p of parts) {
-    const status = p.added ? "ins" : p.removed ? "del" : "same";
-    if (p.value) runs.push(makeRun(p.value, status, d, nextId, style));
+    const len = p.value.length;
+    if (p.added) {
+      appendChars(groups, newChars, ni, len, "ins");
+      ni += len;
+    } else if (p.removed) {
+      appendChars(groups, oldChars, oi, len, "del");
+      oi += len;
+    } else {
+      appendChars(groups, newChars, ni, len, "same");
+      ni += len;
+      oi += len;
+    }
   }
-  if (!runs.length) runs.push(makeRun("", "same", d, nextId, style));
-  return [paragraphFor(newBlk, runs, d)];
+  const children = groups.map((g) => makeRun(g.text, g.status, d, nextId, g.style));
+  if (!children.length) children.push(makeRun("", "same", d, nextId, {}));
+  return [paragraphFor(newBlk, children, d)];
+}
+
+// Expand styled runs to a per-character array carrying each char's style.
+function expandToChars(runs) {
+  const out = [];
+  for (const r of runs) {
+    const style = { bold: r.bold, italic: r.italic, strike: r.strike, code: r.code };
+    for (const ch of r.text) out.push({ ch, style });
+  }
+  return out;
+}
+
+// Append `len` chars from `chars[start..]` to `groups`, merging runs that share
+// the same (status, style) so we emit as few docx runs as possible.
+function appendChars(groups, chars, start, len, status) {
+  for (let i = 0; i < len; i++) {
+    const c = chars[start + i];
+    if (!c) continue;
+    const key = status + "|" + styleKey(c.style);
+    const last = groups[groups.length - 1];
+    if (last && last._key === key) last.text += c.ch;
+    else groups.push({ text: c.ch, status, style: c.style, _key: key });
+  }
+}
+
+function styleKey(s) {
+  return `${!!s.bold}${!!s.italic}${!!s.strike}${!!s.code}`;
 }
 
 function paragraphFor(blk, children, d) {
@@ -179,18 +260,18 @@ function paragraphFor(blk, children, d) {
   return new d.Paragraph(opts);
 }
 
-function runStyle(blk) {
-  return blk.kind === "code" ? { font: "Consolas", size: 20 } : {};
-}
-
 function makeRun(text, status, d, nextId, style = {}) {
-  if (status === "ins") {
-    return new d.InsertedTextRun({ text, id: nextId(), author: AUTHOR, date: DATE, ...style });
+  const opts = { text };
+  if (style.bold) opts.bold = true;
+  if (style.italic) opts.italics = true;
+  if (style.strike) opts.strike = true;
+  if (style.code) {
+    opts.font = "Consolas";
+    opts.size = 20;
   }
-  if (status === "del") {
-    return new d.DeletedTextRun({ text, id: nextId(), author: AUTHOR, date: DATE, ...style });
-  }
-  return new d.TextRun({ text, ...style });
+  if (status === "ins") return new d.InsertedTextRun({ id: nextId(), author: AUTHOR, date: DATE, ...opts });
+  if (status === "del") return new d.DeletedTextRun({ id: nextId(), author: AUTHOR, date: DATE, ...opts });
+  return new d.TextRun(opts);
 }
 
 function renderTable(token, status, d, nextId) {
@@ -198,7 +279,7 @@ function renderTable(token, status, d, nextId) {
     new d.TableCell({
       width: { size: Math.floor(10000 / (token.header.length || 1)) / 100, type: d.WidthType.PERCENTAGE },
       shading: header ? { type: "clear", fill: "F2F2F2" } : undefined,
-      children: [new d.Paragraph({ children: [makeRun(inlineText(c.tokens), status, d, nextId, header ? { bold: true } : {})] })],
+      children: [new d.Paragraph({ children: [makeRun(inlineText(c.tokens), status, d, nextId, { bold: header })] })],
     });
   const rows = [
     new d.TableRow({ tableHeader: true, children: token.header.map((c) => cell(c, true)) }),
