@@ -60,16 +60,20 @@ Then:
   instead of dropping them silently (applies to both PDF and Word).
 - **OCR scanned pages & images** *(off by default)* — reads text off image
   pixels using Tesseract.js. Turn this on for scanned PDFs and image files.
-  It's **English-only** and noticeably slower (a few seconds per page), so
-  leave it off for normal text PDFs.
+  Pick the **OCR language** (English, French, German, Spanish, Italian,
+  Portuguese, Chinese Simplified/Traditional, Japanese, Korean). It's
+  noticeably slower (a few seconds per page), so leave it off for normal
+  text PDFs.
 
 ## What converts well (and what doesn't)
 
 | Content                          | Result                                             |
 | -------------------------------- | -------------------------------------------------- |
 | Text-based PDFs (Word, LaTeX…)   | ✅ Clean text, headings, paragraphs                 |
+| Non-English text (French, 中文…) | ✅ Extracted directly; scans need OCR + the language |
 | Word `.docx`                     | ✅ Headings, bold/italic, lists, and tables         |
-| Scanned PDFs / images + OCR      | ✅ Printed text extracted (turn OCR on)             |
+| Scanned PDFs / images + OCR      | ✅ Printed text extracted (turn OCR on, pick language)|
+| Very long PDFs (100+ pages)      | ✅ Processed page by page with live progress         |
 | Multi-column / complex PDF layout| ⚠️ Usable, but reading order may need tidying      |
 | PDF tables                       | ⚠️ Text is kept; grid structure is not rebuilt     |
 | Handwriting (even with OCR)      | ⚠️ Tesseract handles print well, handwriting poorly|
@@ -80,9 +84,18 @@ Then:
 
 OCR uses [Tesseract.js](https://github.com/naptha/tesseract.js). The first time
 you run it in a session, the browser loads the engine (~3 MB WASM) and the
-English language data (~2 MB) from the local `vendor/` folder — no network. A
-scanned PDF page with no text layer is rasterized and read automatically when
-OCR is on; image files (PNG/JPG/WebP) are OCR'd whole.
+chosen language's data (~0.6–2 MB) from the local `vendor/` folder — no network.
+Only the selected language is downloaded. A scanned PDF page with no text layer
+(or one whose text is garbled because its font lacks a Unicode map) is
+rasterized and read automatically when OCR is on; image files (PNG/JPG/WebP)
+are OCR'd whole.
+
+### Long documents
+
+Large PDFs are processed one page at a time with a live progress bar, and each
+page's memory is released as it goes. If a single page can't be read, it's
+marked `*(page N could not be read)*` and the rest of the document still
+converts — the result's label notes how many pages (if any) were unreadable.
 
 ## Hosting (optional)
 
@@ -121,6 +134,7 @@ Pages (a paid plan); otherwise just run it locally with the command above.
   - `turndown.js`, `turndown-plugin-gfm.js` — HTML → Markdown (with tables)
   - `jszip.min.js` — bundle multiple `.md` files into a zip
   - `tesseract.min.js`, `tesseract-worker.min.js`,
-    `tesseract-core-simd-lstm.wasm(.js)`, `eng.traineddata.gz` — OCR engine
-    and English language data
+    `tesseract-core-simd-lstm.wasm(.js)` — OCR engine
+  - `*.traineddata.gz` — OCR language data (eng, fra, deu, spa, ita, por,
+    chi_sim, chi_tra, jpn, kor)
   - `marked.umd.js` — Markdown parser, and `docx.umd.js` — Word `.docx` writer

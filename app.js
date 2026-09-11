@@ -39,10 +39,12 @@ const optHeadings = document.getElementById("opt-headings");
 const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 const optOcr = document.getElementById("opt-ocr");
+const optOcrLang = document.getElementById("opt-ocr-lang");
 const formatToggle = document.getElementById("format-toggle");
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
 let ocrWorker = null; // lazily created, reused across a batch
+let ocrWorkerLang = null; // language the cached worker was created with
 let outputFormat = "md"; // 'md' | 'docx' — download-time choice
 
 // --- Wiring ------------------------------------------------------------
@@ -152,10 +154,15 @@ function detectKind(file) {
 }
 
 // --- OCR (Tesseract.js) ------------------------------------------------
-// One worker is created on first use and reused for the whole batch.
+// One worker is created on first use and reused while the language is
+// unchanged. If the user picks a different OCR language, the old worker is
+// torn down and a new one created for that language.
 async function getOcrWorker() {
-  if (ocrWorker) return ocrWorker;
-  ocrWorker = await Tesseract.createWorker("eng", 1, OCR_PATHS);
+  const lang = optOcrLang.value || "eng";
+  if (ocrWorker && ocrWorkerLang === lang) return ocrWorker;
+  await disposeOcrWorker();
+  ocrWorker = await Tesseract.createWorker(lang, 1, OCR_PATHS);
+  ocrWorkerLang = lang;
   return ocrWorker;
 }
 
@@ -167,6 +174,7 @@ async function disposeOcrWorker() {
     /* ignore */
   }
   ocrWorker = null;
+  ocrWorkerLang = null;
 }
 
 async function ocrImageSource(source) {
@@ -251,32 +259,54 @@ async function convertPdf(file, fileIndex, fileCount) {
   const total = pdf.numPages;
   const pages = [];
   let ocrPages = 0;
+  let failedPages = 0;
 
-  for (let i = 1; i <= total; i++) {
-    const page = await pdf.getPage(i);
-    const { md, chars } = await convertPdfPage(page);
-    let fragment = md;
+  try {
+    for (let i = 1; i <= total; i++) {
+      // Live progress across every page so long documents show real movement
+      // (and so it's obvious the run hasn't finished early).
+      setProgress((fileIndex + i / total) / fileCount, `Converting ${file.name} — page ${i} of ${total}…`);
 
-    // A page with essentially no extractable text is image-based. If OCR is
-    // enabled, rasterize it and read the text off the pixels instead.
-    if (chars < 8 && optOcr.checked) {
-      setProgress(fileIndex / fileCount, `OCR ${file.name} — page ${i} of ${total}…`);
-      const text = await ocrPdfPage(page);
-      if (text) {
-        fragment = tidy(text);
-        ocrPages++;
+      let fragment = "";
+      let page = null;
+      try {
+        page = await pdf.getPage(i);
+        const { md, chars, garbled } = await convertPdfPage(page);
+        fragment = md;
+
+        // OCR when the page is image-based (no text) or the extracted text is
+        // garbled (e.g. a CJK font with no ToUnicode map), if OCR is enabled.
+        if ((chars < 8 || garbled) && optOcr.checked) {
+          setProgress((fileIndex + i / total) / fileCount, `OCR ${file.name} — page ${i} of ${total}…`);
+          const text = await ocrPdfPage(page);
+          if (text) {
+            fragment = tidy(text);
+            ocrPages++;
+          }
+        }
+      } catch (err) {
+        // Isolate a bad page instead of losing the rest of the document.
+        console.error(`page ${i} failed:`, err);
+        failedPages++;
+        fragment = `*(page ${i} could not be read)*`;
+      } finally {
+        if (page) page.cleanup();
       }
-    }
 
-    pages.push(fragment);
-    page.cleanup();
-    await new Promise((r) => setTimeout(r, 0)); // stay responsive on large PDFs
+      pages.push(fragment);
+      await new Promise((r) => setTimeout(r, 0)); // stay responsive on large PDFs
+    }
+  } finally {
+    // Release the document's memory — important for large/multi-file batches.
+    pdf.destroy();
   }
 
   let md = pages.join(optPageBreaks.checked ? "\n\n---\n\n" : "\n\n");
   md = tidy(md);
   const meta =
-    `PDF · ${total} page${total > 1 ? "s" : ""}` + (ocrPages ? ` · ${ocrPages} OCR'd` : "");
+    `PDF · ${total} page${total > 1 ? "s" : ""}` +
+    (ocrPages ? ` · ${ocrPages} OCR'd` : "") +
+    (failedPages ? ` · ${failedPages} unreadable` : "");
   return { markdown: md, meta };
 }
 
@@ -334,14 +364,19 @@ async function convertPdfPage(page) {
       if (prev) {
         const gap = part.x - (prev.x + prev.width);
         const spaceW = prev.size * 0.25;
-        if (gap > spaceW && !/\s$/.test(text) && !/^\s/.test(part.str)) text += " ";
+        const lastCh = text.slice(-1);
+        const firstCh = part.str.charAt(0);
+        // CJK scripts don't use spaces between characters; positional gaps
+        // there are just glyph spacing, so don't inject spaces between them.
+        const cjkBoundary = isCJK(lastCh) && isCJK(firstCh);
+        if (gap > spaceW && !cjkBoundary && !/\s$/.test(text) && !/^\s/.test(part.str)) text += " ";
       }
       text += part.str;
       prev = part;
     }
     const size = median(line.items.map((p) => p.size));
     const bold = line.items.some((p) => /bold|black|heavy|semibold/i.test(p.fontName));
-    return { y: line.y, text: text.replace(/\s+/g, " ").trim(), size, bold };
+    return { y: line.y, text: text.replace(/[ \t]+/g, " ").trim(), size, bold };
   });
 
   // Body font size = the most common line size, used as the heading baseline.
@@ -378,8 +413,26 @@ async function convertPdfPage(page) {
     prevSize = line.size;
   }
 
-  const chars = lines.reduce((n, l) => n + l.text.replace(/\s/g, "").length, 0);
-  return { md: out.join("\n"), chars };
+  const allText = lines.map((l) => l.text).join("");
+  const chars = allText.replace(/\s/g, "").length;
+  // "Garbled" = a page whose extracted text is mostly U+FFFD replacement
+  // characters, which happens when a font (often CJK) has no ToUnicode map.
+  const bad = (allText.match(/�/g) || []).length;
+  const garbled = chars > 0 && bad / chars > 0.2;
+  return { md: out.join("\n"), chars, garbled };
+}
+
+// Is this character in a CJK block (Chinese/Japanese/Korean ideographs & kana)?
+function isCJK(ch) {
+  if (!ch) return false;
+  const c = ch.codePointAt(0);
+  return (
+    (c >= 0x3040 && c <= 0x30ff) || // hiragana + katakana
+    (c >= 0x3400 && c <= 0x4dbf) || // CJK ext A
+    (c >= 0x4e00 && c <= 0x9fff) || // CJK unified ideographs
+    (c >= 0xac00 && c <= 0xd7a3) || // Hangul syllables
+    (c >= 0xf900 && c <= 0xfaff) // CJK compatibility ideographs
+  );
 }
 
 // --- Rendering results -------------------------------------------------

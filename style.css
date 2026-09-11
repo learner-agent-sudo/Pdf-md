@@ -98,6 +98,16 @@ code {
 .opt { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .opt input { accent-color: var(--accent); }
 .opt-note { color: var(--border); font-size: 0.8rem; }
+.opt-lang { gap: 6px; color: var(--muted); }
+.opt-lang select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
 
 /* Progress */
 .progress-wrap { margin-top: 28px; }

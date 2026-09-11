@@ -60,7 +60,22 @@
       </label>
       <label class="opt">
         <input type="checkbox" id="opt-ocr" />
-        OCR scanned pages &amp; images <span class="opt-note">(slow, English)</span>
+        OCR scanned pages &amp; images <span class="opt-note">(slow)</span>
+      </label>
+      <label class="opt opt-lang">
+        OCR language
+        <select id="opt-ocr-lang">
+          <option value="eng">English</option>
+          <option value="fra">French</option>
+          <option value="deu">German</option>
+          <option value="spa">Spanish</option>
+          <option value="ita">Italian</option>
+          <option value="por">Portuguese</option>
+          <option value="chi_sim">Chinese (Simplified)</option>
+          <option value="chi_tra">Chinese (Traditional)</option>
+          <option value="jpn">Japanese</option>
+          <option value="kor">Korean</option>
+        </select>
       </label>
     </section>
 
@@ -87,11 +102,12 @@
 
     <footer>
       <p>
-        Text-based PDFs and <code>.docx</code> files convert cleanly. Enable
-        <strong>OCR</strong> to read scanned/image PDFs and image files
-        (printed text works well; handwriting and signatures do not). OCR is
-        English-only and noticeably slower. The old binary <code>.doc</code>
-        format isn't supported (save it as <code>.docx</code> first).
+        Text-based PDFs and <code>.docx</code> files convert cleanly, including
+        non-English text. Enable <strong>OCR</strong> (and pick the language) to
+        read scanned/image PDFs and image files — printed text in the selected
+        language works well; handwriting and signatures do not. OCR is
+        noticeably slower. The old binary <code>.doc</code> format isn't
+        supported (save it as <code>.docx</code> first).
       </p>
     </footer>
   </main>
