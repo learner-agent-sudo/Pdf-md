@@ -65,6 +65,11 @@ Then:
   (English, French, German, Spanish, Italian, Portuguese, Chinese
   Simplified/Traditional, Japanese, Korean). OCR is noticeably slower (a few
   seconds per page), so leave it off for normal text PDFs.
+- **Keep Word tracked changes & comments** *(on by default, `.docx`)* — when
+  converting a Word file, insertions are marked `{++like this++}`, deletions are
+  kept as `{--like this--}`, and comments are inlined as `{>>note<<}`
+  ([CriticMarkup](http://fletcher.github.io/MultiMarkdown-4/CriticMarkup)). Turn
+  it off to get the clean, changes-accepted text instead.
 - **Compare 2 files → tracked-changes Word** — upload the original file, then
   the revised one, to get a Word `.docx` **redline** (see below).
 
@@ -92,6 +97,22 @@ Only the selected language is downloaded. A scanned PDF page with no text layer
 (or one whose text is garbled because its font lacks a Unicode map) is
 rasterized and read automatically when OCR is on; image files (PNG/JPG/WebP)
 are OCR'd whole.
+
+### Word (.docx) fidelity
+
+Word stores some things in ways a naïve converter loses. The tool restores them
+before conversion:
+
+- **Auto-numbering** — Word's list/heading numbers (`1.`, `1.1.`, `a)`) are
+  generated on the fly, not stored as text, so a plain conversion drops them (or
+  renumbers nested items as `1., 2.`). The tool computes each number from the
+  document's numbering definitions and writes it out literally, so `1.1`, `1.2`,
+  `2.` survive — and cross-references still line up.
+- **Tracked changes & comments** — instead of silently accepting insertions and
+  discarding deletions and comments, they're preserved as CriticMarkup (see the
+  option above).
+- **Merged table cells** — a cell spanning columns/rows is expanded into aligned
+  empty cells so the Markdown table stays lined up instead of shifting.
 
 ### Auto-detect language
 
@@ -164,6 +185,7 @@ Pages (a paid plan); otherwise just run it locally with the command above.
 - `app.js` — drag/drop, batch handling, PDF/Word/image/MD → Markdown logic
 - `md-to-docx.js` — Markdown → real OOXML `.docx` (via marked + docx)
 - `compare.js` — two-file diff → tracked-changes `.docx` (via marked + diff + docx)
+- `docx-enrich.js` — restores Word numbering, tracked changes & comments pre-mammoth
 - `style.css` — styling
 - `vendor/` — bundled libraries, all local (no CDN):
   - `pdf.min.mjs`, `pdf.worker.min.mjs` — pdf.js (PDF parsing)

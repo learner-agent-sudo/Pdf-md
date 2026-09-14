@@ -11,6 +11,7 @@
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
 import { markdownToDocxBlob } from "./md-to-docx.js";
 import { compareToDocxBlob } from "./compare.js";
+import { enrichDocx } from "./docx-enrich.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
 const { Diff } = window;
@@ -43,6 +44,7 @@ const optPageBreaks = document.getElementById("opt-pagebreaks");
 const optImageMarks = document.getElementById("opt-imagemarks");
 const optOcr = document.getElementById("opt-ocr");
 const optOcrLang = document.getElementById("opt-ocr-lang");
+const optKeepChanges = document.getElementById("opt-keepchanges");
 const optCompare = document.getElementById("opt-compare");
 const formatToggle = document.getElementById("format-toggle");
 
@@ -141,10 +143,10 @@ function baseNameOf(file) {
 }
 
 // Convert any supported file to Markdown (throws for unsupported types).
-async function fileToMarkdown(file, i, count) {
+async function fileToMarkdown(file, i, count, opts = {}) {
   const kind = detectKind(file);
   if (kind === "pdf") return convertPdf(file, i, count);
-  if (kind === "docx") return convertDocx(file);
+  if (kind === "docx") return convertDocx(file, opts);
   if (kind === "image") return convertImage(file);
   if (kind === "md") return convertMarkdownFile(file);
   if (kind === "doc") throw new Error("Old .doc format isn't supported — save it as .docx and try again.");
@@ -165,10 +167,12 @@ async function runCompare(files) {
     return;
   }
   try {
+    // Compare accepted content (don't inject tracked-change markers, which
+    // would otherwise appear as literal text in the diff).
     setProgress(0.1, `Reading ${files[0].name}…`);
-    const a = await fileToMarkdown(files[0], 0, 2);
+    const a = await fileToMarkdown(files[0], 0, 2, { keepChanges: false });
     setProgress(0.5, `Reading ${files[1].name}…`);
-    const b = await fileToMarkdown(files[1], 1, 2);
+    const b = await fileToMarkdown(files[1], 1, 2, { keepChanges: false });
     setProgress(0.85, "Building tracked-changes document…");
     const blob = await compareToDocxBlob(a.markdown, b.markdown);
     const baseName = `${baseNameOf(files[0])}_vs_${baseNameOf(files[1])}_changes`;
@@ -335,28 +339,38 @@ async function convertImage(file) {
 }
 
 // --- DOCX → Markdown ---------------------------------------------------
-async function convertDocx(file) {
+async function convertDocx(file, opts = {}) {
   const arrayBuffer = await file.arrayBuffer();
-  const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
-  const md = tidy(makeTurndown().turndown(prepDocxHtml(html)));
+  const keepChanges = opts.keepChanges ?? optKeepChanges.checked;
+  // Recover Word auto-numbering, tracked changes, and comments before mammoth.
+  const enriched = await enrichDocx(arrayBuffer, { keepChanges });
+  const { value: html } = await mammoth.convertToHtml({ arrayBuffer: enriched });
+  let md = makeTurndown().turndown(prepDocxHtml(html));
+  // Turndown escapes a leading "1." (to avoid making a list); our injected
+  // Word numbers are literal, so unescape them: "1\. Overview" -> "1. Overview".
+  md = md.replace(/^(\s*)(\d+)\\\.(\s)/gm, "$1$2.$3");
+  md = tidy(md);
   return { markdown: md, meta: `Word · ${countWords(md)} words` };
 }
 
 // mammoth emits table cells as <td><p>…</p></td> with no header row, but the
 // GFM Markdown-table rule only fires when the first row is <th>. Markdown
-// tables need a header row anyway, so: flatten the paragraphs inside each cell
-// and promote the first row's cells to <th>.
+// tables need a header row anyway, so we flatten cell paragraphs, expand merged
+// cells (colspan/rowspan) so every row has the same column count, and promote
+// the first row's cells to <th>.
 function prepDocxHtml(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
   doc.querySelectorAll("td, th").forEach((cell) => {
     const ps = cell.querySelectorAll(":scope > p");
     if (ps.length) {
-      cell.innerHTML = [...ps].map((p) => p.innerHTML.trim()).join(" ");
+      // Join multi-paragraph cells with <br> so line breaks survive in Markdown.
+      cell.innerHTML = [...ps].map((p) => p.innerHTML.trim()).filter(Boolean).join("<br>");
     }
   });
 
   doc.querySelectorAll("table").forEach((table) => {
+    expandMergedCells(doc, table);
     const firstRow = table.querySelector("tr");
     if (!firstRow) return;
     const cells = [...firstRow.children];
@@ -370,6 +384,57 @@ function prepDocxHtml(html) {
   });
 
   return doc.body.innerHTML;
+}
+
+// Normalize a table so every row has the same number of single cells: a
+// colspan=N cell becomes the cell plus N-1 empty cells, and a rowspan=N cell
+// drops an empty placeholder into the next N-1 rows at that column. Markdown
+// tables can't merge cells, so this keeps columns aligned instead of garbled.
+function expandMergedCells(doc, table) {
+  const rows = [...table.querySelectorAll(":scope > tbody > tr, :scope > tr, :scope > thead > tr")];
+  if (!rows.length) return;
+  const carry = {}; // column index -> remaining rowspan placeholders to insert
+
+  for (const row of rows) {
+    const cells = [...row.children];
+    let col = 0;
+    const frag = [];
+    const emit = (node) => { frag[col] = node; };
+
+    const placeCarried = () => {
+      while (carry[col] > 0) {
+        const empty = doc.createElement(cells[0] && cells[0].nodeName === "TH" ? "td" : "td");
+        empty.innerHTML = "";
+        emit(empty);
+        carry[col]--;
+        if (carry[col] <= 0) delete carry[col];
+        col++;
+      }
+    };
+
+    for (const cell of cells) {
+      placeCarried();
+      const colspan = parseInt(cell.getAttribute("colspan") || "1", 10);
+      const rowspan = parseInt(cell.getAttribute("rowspan") || "1", 10);
+      cell.removeAttribute("colspan");
+      cell.removeAttribute("rowspan");
+      emit(cell);
+      if (rowspan > 1) carry[col] = rowspan - 1;
+      col++;
+      for (let k = 1; k < colspan; k++) {
+        const empty = doc.createElement(cell.nodeName.toLowerCase());
+        empty.innerHTML = "";
+        emit(empty);
+        if (rowspan > 1) carry[col] = rowspan - 1;
+        col++;
+      }
+    }
+    placeCarried();
+
+    // Rebuild the row in column order.
+    row.textContent = "";
+    for (const node of frag) if (node) row.appendChild(node);
+  }
 }
 
 function makeTurndown() {
