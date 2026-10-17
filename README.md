@@ -169,6 +169,39 @@ so the link always reflects the latest code.
 Prefer no hosting at all? The site is fully static — just run the local server
 described above.
 
+### Uptime monitoring (healthchecks.io)
+
+The workflow `.github/workflows/healthcheck.yml` tests the live site every hour
+(and after each deploy) with `scripts/healthcheck.sh`, then reports the result
+to [healthchecks.io](https://healthchecks.io). The test checks that the page
+loads, that the no-upload Content-Security-Policy is still intact, and that every
+file the converter needs (scripts, workers, OCR engine, language packs) is
+served. You get an alert if a check fails, **or if checks stop arriving**.
+
+**One-time setup:**
+
+1. In healthchecks.io, **Add Check**. Set **Period = 1 hour** and **Grace = 1
+   hour**, because GitHub's scheduled runs are often 10–30 minutes late.
+2. Copy the check's **ping URL** (`https://hc-ping.com/…`).
+3. In this repo, go to **Settings → Secrets and variables → Actions → New
+   repository secret**. Name it `HEALTHCHECKS_PING_URL` and paste the ping URL.
+   Keep it a secret, because anyone who has it can send fake pings.
+4. In the **Actions** tab, open **Site health check** and click **Run workflow**.
+   The check should turn green within a minute. Each ping includes the
+   file-by-file report, which you can see in the check's event log.
+5. In healthchecks.io → **Integrations**, choose how you want to be alerted
+   (email is on by default).
+
+If you use a custom domain, add a repository *variable* named `SITE_URL`
+with that domain. You can also run the test by hand:
+`scripts/healthcheck.sh https://<your-user>.github.io/<repo>/`.
+
+The monitoring runs only on GitHub's servers. The page itself still makes no
+outbound connections and reports nothing about visitors or their files. Note:
+GitHub pauses scheduled workflows in a repo with no activity for 60 days.
+healthchecks.io will then alert you that pings have stopped, and you can
+re-enable the workflow from the Actions tab.
+
 ### Is it safe to host publicly?
 
 Yes. There is no server, database, account, or secret — just static files.
@@ -187,6 +220,8 @@ Pages (a paid plan); otherwise just run it locally with the command above.
 - `compare.js` — two-file diff → tracked-changes `.docx` (via marked + diff + docx)
 - `docx-enrich.js` — restores Word numbering, tracked changes & comments pre-mammoth
 - `style.css` — styling
+- `scripts/healthcheck.sh` — live-site smoke test (used by the health check workflow)
+- `.github/workflows/` — `deploy-pages.yml` (publish) and `healthcheck.yml` (monitor)
 - `vendor/` — bundled libraries, all local (no CDN):
   - `pdf.min.mjs`, `pdf.worker.min.mjs` — pdf.js (PDF parsing)
   - `mammoth.browser.min.js` — Word `.docx` → HTML

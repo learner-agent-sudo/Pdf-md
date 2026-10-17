@@ -1,0 +1,68 @@
+name: Site health check
+
+# Tests the live site (scripts/healthcheck.sh) and reports the result to
+# healthchecks.io, which alerts you if a check fails — or if checks stop
+# arriving at all. Runs hourly, after every Pages deploy, and on demand.
+#
+# Setup: add the check's ping URL as the repository secret
+# HEALTHCHECKS_PING_URL (see README → "Uptime monitoring"). Without it the
+# site is still checked, but nothing is reported.
+#
+# This runs on GitHub's servers, never in visitors' browsers: the page itself
+# makes no outbound connections and reports nothing.
+
+on:
+  schedule:
+    - cron: "17 * * * *" # hourly, off the hour (on-the-hour runs get delayed)
+  workflow_run:
+    workflows: ["Deploy to GitHub Pages"]
+    types: [completed]
+  workflow_dispatch: # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-healthcheck
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # adds pipefail, so `| tee` can't hide a failed check
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HC_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+      SITE_URL: ${{ vars.SITE_URL }} # optional override, e.g. a custom domain
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Signal start to healthchecks.io
+        if: env.HC_PING_URL != ''
+        run: curl -fsS -m 10 --retry 3 -o /dev/null "$HC_PING_URL/start" || echo "::warning::Could not reach healthchecks.io"
+
+      - name: Check the live site
+        run: |
+          if [ -z "$SITE_URL" ]; then
+            owner="${GITHUB_REPOSITORY%%/*}"
+            SITE_URL="https://${owner,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          fi
+          scripts/healthcheck.sh "$SITE_URL" 2>&1 | tee healthcheck.log
+
+      - name: Report success to healthchecks.io
+        if: success() && env.HC_PING_URL != ''
+        run: curl -fsS -m 10 --retry 3 -o /dev/null --data-binary @healthcheck.log "$HC_PING_URL" || echo "::warning::Could not reach healthchecks.io"
+
+      - name: Report failure to healthchecks.io
+        if: failure() && env.HC_PING_URL != ''
+        run: |
+          [ -s healthcheck.log ] || echo "The health check job failed before checking the site." > healthcheck.log
+          curl -fsS -m 10 --retry 3 -o /dev/null --data-binary @healthcheck.log "$HC_PING_URL/fail" || echo "::warning::Could not reach healthchecks.io"
+
+      - name: Note missing healthchecks.io setup
+        if: always() && env.HC_PING_URL == ''
+        run: echo "::notice::HEALTHCHECKS_PING_URL is not set, so this result was not reported. See README → Uptime monitoring."
