@@ -12,6 +12,7 @@ import * as pdfjsLib from "./vendor/pdf.min.mjs";
 import { markdownToDocxBlob } from "./md-to-docx.js";
 import { compareToDocxBlob } from "./compare.js";
 import { enrichDocx } from "./docx-enrich.js";
+import { redactTexts, describeCounts } from "./redact.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
 const { Diff } = window;
@@ -47,11 +48,26 @@ const optOcrLang = document.getElementById("opt-ocr-lang");
 const optKeepChanges = document.getElementById("opt-keepchanges");
 const optCompare = document.getElementById("opt-compare");
 const formatToggle = document.getElementById("format-toggle");
+const redactTarget = document.getElementById("redact-target");
+const optRedactTerms = document.getElementById("opt-redact-terms");
+const redactBoxes = {
+  pii: document.getElementById("opt-redact-pii"),
+  sensitive: document.getElementById("opt-redact-sensitive"),
+  commercial: document.getElementById("opt-redact-commercial"),
+};
 
 let results = []; // [{ baseName, markdown, meta, ok, error }]
 let ocrWorker = null; // lazily created, reused across a batch
 let ocrWorkerLang = null; // language the cached worker was created with
 let outputFormat = "md"; // 'md' | 'docx' — download-time choice
+
+// What to remove, remembered per output format. Markdown (often pasted into
+// AI tools or shared) strips everything by default; Word (usually a working
+// copy of the document) keeps everything unless the user ticks a box.
+const redactPrefs = {
+  md: { pii: true, sensitive: true, commercial: true },
+  docx: { pii: false, sensitive: false, commercial: false },
+};
 
 // --- Wiring ------------------------------------------------------------
 browseBtn.addEventListener("click", () => fileInput.click());
@@ -91,17 +107,50 @@ optCompare.addEventListener("change", () => {
   resultsEl.innerHTML = "";
   resultsHead.hidden = true;
   dropZone.classList.toggle("compare-on", optCompare.checked);
+  syncRedactBoxes();
 });
 
 // Segmented "Download as" toggle. Output format is a download-time choice, so
-// switching it just re-renders the existing results' buttons/filenames.
+// switching it just re-renders the existing results' buttons/filenames (and
+// applies that format's redaction settings).
 formatToggle.addEventListener("click", (e) => {
   const btn = e.target.closest(".seg");
   if (!btn) return;
   outputFormat = btn.dataset.format;
   formatToggle.querySelectorAll(".seg").forEach((b) => b.classList.toggle("active", b === btn));
+  syncRedactBoxes();
   if (results.length) renderResults();
 });
+
+// Redaction is applied when results are shown, so changing it updates the
+// preview and downloads immediately, without converting again.
+for (const [key, box] of Object.entries(redactBoxes)) {
+  box.addEventListener("change", () => {
+    redactPrefs[redactFormat()][key] = box.checked;
+    if (results.length) renderResults();
+  });
+}
+let termsTimer = null;
+optRedactTerms.addEventListener("input", () => {
+  clearTimeout(termsTimer);
+  termsTimer = setTimeout(() => results.length && renderResults(), 400);
+});
+
+// The format whose redaction settings apply (a comparison is always Word).
+function redactFormat() {
+  return optCompare.checked ? "docx" : outputFormat;
+}
+
+function syncRedactBoxes() {
+  const prefs = redactPrefs[redactFormat()];
+  for (const [key, box] of Object.entries(redactBoxes)) box.checked = prefs[key];
+  redactTarget.textContent = redactFormat() === "md" ? "Markdown" : "Word";
+}
+
+function redactSettings() {
+  const terms = optRedactTerms.value.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
+  return { ...redactPrefs[redactFormat()], terms };
+}
 
 // --- Batch flow --------------------------------------------------------
 async function handleFiles(fileList) {
@@ -173,16 +222,15 @@ async function runCompare(files) {
     const a = await fileToMarkdown(files[0], 0, 2, { keepChanges: false });
     setProgress(0.5, `Reading ${files[1].name}…`);
     const b = await fileToMarkdown(files[1], 1, 2, { keepChanges: false });
-    setProgress(0.85, "Building tracked-changes document…");
-    const blob = await compareToDocxBlob(a.markdown, b.markdown);
     const baseName = `${baseNameOf(files[0])}_vs_${baseNameOf(files[1])}_changes`;
+    // The redline itself is built on download, after any redaction.
     results = [{
       ok: true,
       isCompare: true,
       baseName,
       meta: `tracked changes · ${files[0].name} → ${files[1].name}`,
-      compareBlob: blob,
-      previewText: diffPreview(a.markdown, b.markdown),
+      aMarkdown: a.markdown,
+      bMarkdown: b.markdown,
     }];
   } catch (err) {
     console.error(err);
@@ -207,19 +255,45 @@ function diffPreview(aMd, bMd) {
   return out.trim() || "(no textual differences found)";
 }
 
+// What a result shows and downloads under the current redaction settings:
+// { text, baseName, red } (plus a, b for a comparison). Cached per settings,
+// so re-rendering or toggling back doesn't redo the work.
+function viewOf(r) {
+  const settings = redactSettings();
+  const key = JSON.stringify(settings);
+  if (r._view && r._view.key === key) return r._view;
+  const on = settings.pii || settings.sensitive || settings.commercial || settings.terms.length > 0;
+  const sources = r.isCompare ? [r.aMarkdown, r.bMarkdown] : [r.markdown];
+  // Both sides of a comparison are redacted together so a person gets the
+  // same [PERSON n] in each, and the redline doesn't show false changes.
+  const red = on ? redactTexts(sources, settings) : null;
+  const [a, b] = red ? red.texts : sources;
+  r._view = {
+    key,
+    red,
+    a,
+    b,
+    text: r.isCompare ? diffPreview(a, b) : a,
+    baseName: red ? red.rename(r.baseName) : r.baseName,
+  };
+  return r._view;
+}
+
 // Produce the downloadable file for a result in its chosen format. The docx
-// blob is generated on demand and cached on the result object.
+// blob is generated on demand and cached on the result's current view.
 async function fileFor(r) {
+  const v = viewOf(r);
   if (r.isCompare) {
-    return { blob: r.compareBlob, name: `${r.baseName}.docx` };
+    v.docx ||= await compareToDocxBlob(v.a, v.b);
+    return { blob: v.docx, name: `${v.baseName}.docx` };
   }
   if (outputFormat === "docx") {
-    if (!r._docxBlob) r._docxBlob = await markdownToDocxBlob(r.markdown);
-    return { blob: r._docxBlob, name: `${r.baseName}.docx` };
+    v.docx ||= await markdownToDocxBlob(v.text);
+    return { blob: v.docx, name: `${v.baseName}.docx` };
   }
   return {
-    blob: new Blob([r.markdown], { type: "text/markdown;charset=utf-8" }),
-    name: `${r.baseName}.md`,
+    blob: new Blob([v.text], { type: "text/markdown;charset=utf-8" }),
+    name: `${v.baseName}.md`,
   };
 }
 
@@ -667,10 +741,11 @@ function renderResults() {
     bar.className = "card-bar";
 
     const ext = r.isCompare || format === "docx" ? "docx" : "md";
-    const previewText = r.isCompare ? r.previewText : r.markdown;
+    const view = r.ok ? viewOf(r) : null;
+    const previewText = view ? view.text : "";
     const name = document.createElement("span");
     name.className = "card-name";
-    name.textContent = r.ok ? `${r.baseName}.${ext}  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
+    name.textContent = r.ok ? `${view.baseName}.${ext}  ·  ${r.meta}` : `${r.baseName}  ·  failed`;
     bar.appendChild(name);
 
     if (r.ok) {
@@ -698,7 +773,7 @@ function renderResults() {
       dlBtn.addEventListener("click", async () => {
         dlBtn.disabled = true;
         const original = dlBtn.textContent;
-        if (ext === "docx" && !r.isCompare) dlBtn.textContent = "Building…";
+        if (ext === "docx") dlBtn.textContent = "Building…";
         try {
           const { blob, name: fname } = await fileFor(r);
           downloadBlob(blob, fname);
@@ -716,6 +791,15 @@ function renderResults() {
     }
 
     card.appendChild(bar);
+
+    if (view && view.red) {
+      const note = document.createElement("p");
+      note.className = "card-note card-redacted";
+      note.textContent = view.red.total
+        ? `Removed ${view.red.total} item${view.red.total === 1 ? "" : "s"}: ${describeCounts(view.red.counts, view.red.people)}`
+        : "Redaction is on, but nothing matching was found.";
+      card.appendChild(note);
+    }
 
     if (r.ok && r.isCompare) {
       const note = document.createElement("p");

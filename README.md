@@ -72,6 +72,10 @@ Then:
   it off to get the clean, changes-accepted text instead.
 - **Compare 2 files → tracked-changes Word** — upload the original file, then
   the revised one, to get a Word `.docx` **redline** (see below).
+- **Remove personal & commercial information** — strip personal identifiers,
+  sensitive personal data, and commercial terms, plus any words you list.
+  **On by default for Markdown, off for Word.** See *Removing personal &
+  commercial information* below.
 
 ## What converts well (and what doesn't)
 
@@ -147,6 +151,50 @@ draft), which Word can't do. Note also that a change to *formatting alone*
 (identical words, different styling) is applied in the output but not marked as
 a separate tracked revision.
 
+## Removing personal & commercial information
+
+The **Remove from the output** panel replaces each detected item with a
+labelled placeholder, so the text still reads sensibly, e.g. when pasted into
+Claude:
+
+> Dear [PERSON 1], the Client shall pay [AMOUNT] per year with a [RATE]
+> discount, payable [TERMS]. Contact [PERSON 2] at [EMAIL].
+
+| Option | What it removes |
+| ------ | --------------- |
+| **Personal identifiers** | Names, emails, phone numbers, postal addresses, dates of birth, ID numbers (passport, HKID, China ID, SSN, UK NI, NRIC…), bank accounts / IBANs, card numbers, IP addresses, social-profile links |
+| **Sensitive personal data** | Sentences or table cells about health, religion, ethnicity, sexuality, political views, union membership, biometric/genetic data, or criminal records |
+| **Commercial terms** | Money amounts (any currency, in figures or words, incl. `人民币100万元`), percentages and rates, payment terms (`Net 30`, "within 30 days of invoice"), and values of fields/columns like *Price*, *Fee*, *Total*, *Budget*, *ARR* |
+| **Also remove** | Any words you type, comma-separated (client names, project code names…). They become `[REDACTED 1]`, `[REDACTED 2]` in the order you list them |
+
+- **Defaults follow the output format.** Markdown is usually shared or fed to
+  AI tools, so all three options start ticked. Word is usually your own
+  working copy, so they start unticked. Each format remembers your choices
+  while the page is open. A comparison redline counts as Word.
+- **Changes apply instantly**, without converting again. The preview, **Copy**,
+  downloads, and the zip all use the redacted text. Each result says what was
+  removed, e.g. *Removed 17 items: 4 people (5 mentions) · 3 emails · 3 amounts*.
+- **The same person keeps the same number** (`[PERSON 2]`) throughout a
+  document: "Mr Smith" and "Smith" match an earlier "John Smith". When
+  comparing two files, both share the numbering, so the redline shows real
+  changes only.
+- **File names are cleaned too.** Your custom words and detected names are
+  also removed from the download's file name.
+
+**How detection works, and its limits.** This is pattern matching, not AI.
+Nothing leaves the browser. A name is found when something points to it:
+a label (`Name:`, `Signed by:`, `姓名：`), a title (`Mr`, `Dr`, `陈先生`),
+a greeting or sign-off, or a *Name/Owner/Contact* table column. Once found,
+every other mention of it is removed. A name standing alone in running text
+("Alice will send it") is missed unless it also appears somewhere with a cue,
+so add such names to **Also remove**. ID and card numbers are checked against
+their checksums to avoid false hits. Sensitive-data detection skips policy
+wording that lists several categories ("…regardless of race, religion or
+disability"). Ordinary business terms such as "customer health score" or
+"race condition" are left alone. PDF tables lose their columns, so
+column-based detection only works for Word tables. **Always check the
+preview before sharing.**
+
 ### Long documents
 
 Large PDFs are processed one page at a time with a live progress bar, and each
@@ -219,6 +267,7 @@ Pages (a paid plan); otherwise just run it locally with the command above.
 - `md-to-docx.js` — Markdown → real OOXML `.docx` (via marked + docx)
 - `compare.js` — two-file diff → tracked-changes `.docx` (via marked + diff + docx)
 - `docx-enrich.js` — restores Word numbering, tracked changes & comments pre-mammoth
+- `redact.js` — removes personal identifiers, sensitive data & commercial terms
 - `style.css` — styling
 - `scripts/healthcheck.sh` — live-site smoke test (used by the health check workflow)
 - `.github/workflows/` — `deploy-pages.yml` (publish) and `healthcheck.yml` (monitor)
